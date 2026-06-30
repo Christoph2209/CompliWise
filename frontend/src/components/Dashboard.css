@@ -1,0 +1,138 @@
+.dashboard {
+  padding: 20px;
+  background: #f7f8fa;
+  min-height: 100vh;
+  font-family: Arial, sans-serif;
+  color: #000000; /* 👈 FIX: strong readable text */
+}
+/* HEADER */
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  color: #d8abab; /* 👈 FIX: darker header text */
+}
+
+.dashboard-header h1 {
+  color: #000000;
+}
+
+.actions button {
+  margin-left: 10px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  color: #000000; /* 👈 FIX: ensure buttons are readable */
+}
+
+.actions .danger {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+/* KPI GRID */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.kpi-card {
+  background: white;
+  padding: 14px;
+  border-radius: 12px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+}
+
+.kpi-label {
+  font-size: 13px;
+  color: #4b5563; /* darker gray */
+}
+
+.kpi-value {
+  font-size: 26px;
+  font-weight: bold;
+  margin-top: 5px;
+}
+
+.kpi-card.alert {
+  border-left: 4px solid #ef4444;
+}
+
+.kpi-card.warn {
+  border-left: 4px solid #f59e0b;
+}
+
+/* GRID */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+/* PANELS */
+.panel {
+  background: rgb(255, 255, 255);
+  padding: 16px;
+  border-radius: 12px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+  height: 100%;
+  color: #000000; /* 👈 ensure contrast inside panels */
+}
+
+.panel h2 {
+  margin-bottom: 10px;
+  font-size: 16px;
+  color: #000000; /* darker text for headers */
+}
+
+/* ALERTS */
+.alert-item {
+  padding: 10px;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: #000000; /* 👈 important fix */
+}
+
+.alert-item p {
+  margin: 4px 0 0 0;
+}
+
+.alert-item.critical {
+  background: #ff0000;
+  border-left: 4px solid #dc2626;
+}
+
+.alert-item.warning {
+  background: #fef3c7;
+  border-left: 4px solid #f59e0b;
+}
+
+.empty {
+  color: #000000; /* darker than before */
+  font-size: 13px;
+}
+
+/* ACTIONS */
+.action-btn {
+  width: 100%;
+  margin-bottom: 10px;
+  padding: 10px;
+  border: none;
+  border-radius: 8px;
+  background: #eef2ff;
+  cursor: pointer;
+  font-weight: 500;
+  transition: 0.15s;
+  color: #000000;
+}
+
+.action-btn:hover {
+  background: #e0e7ff;
+}

@@ -1,0 +1,219 @@
+import { useEffect, useState } from "react";
+import { getSchedule } from "../api/schedule";
+
+const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday"];
+const PERIODS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+const CACHE_KEY = "schedule_cache_v1";
+const CACHE_TTL = 1000 * 60 * 5;
+
+
+
+export default function TeacherSchedules() {
+  const [entries, setEntries] = useState<any[]>([]);
+  const [selectedTeacher, setSelectedTeacher] = useState("");
+
+  useEffect(() => {
+    async function load() {
+      let data: any[] = [];
+
+      // 1. Cache
+      const cached = localStorage.getItem(CACHE_KEY);
+
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached);
+
+          if (Date.now() - parsed.timestamp < CACHE_TTL) {
+            data = parsed.data || [];
+          }
+        } catch {
+          console.log("Cache parse failed");
+        }
+      }
+
+      // 2. Always refresh
+      const fresh = (await getSchedule()) || [];
+      data = fresh;
+
+      setEntries(data);
+
+      // 3. Set default teacher ONCE from fresh data
+      if (data.length > 0) {
+        setSelectedTeacher((prev) => prev || data[0].staff_id);
+      }
+
+      // 4. Cache update
+      localStorage.setItem(
+        CACHE_KEY,
+        JSON.stringify({
+          timestamp: Date.now(),
+          data,
+        })
+      );
+    }
+
+    load();
+  }, []);
+
+  // Build staff list
+ const staff = Array.from(
+  new Map(
+    entries
+      .filter((e) => e.staff_id)
+      .map((entry) => [
+        entry.staff_id,
+        {
+          id: entry.staff_id,
+          name: entry.staff_name,
+        },
+      ])
+  ).values()
+);
+
+  const teacherSchedule = entries.filter(
+    (entry) => entry.staff_id === selectedTeacher
+  );
+
+  function getClass(day: string, period: number) {
+    return teacherSchedule.find(
+      (entry) =>
+        entry.day_of_week === day &&
+        Number(entry.period) === period
+    );
+  }
+function getStudentCount(day: string, period: number) {
+  return teacherSchedule.filter(
+    (entry) =>
+      entry.day_of_week === day &&
+      Number(entry.period) === period
+  ).length;
+}
+  return (
+    <div style={{ padding: "20px", fontFamily: "Arial, sans-serif" }}>
+      <h1 style={{ marginBottom: "16px" }}>Staff Schedules</h1>
+
+      {/* Staff Selector */}
+      <div style={{ marginBottom: "20px" }}>
+        <label style={{ marginRight: "10px", fontWeight: "bold" }}>
+          Staff:
+        </label>
+
+        <select
+          value={selectedTeacher}
+          onChange={(e) => setSelectedTeacher(e.target.value)}
+          style={{
+            padding: "6px 10px",
+            borderRadius: "6px",
+            border: "1px solid #ccc",
+          }}
+        >
+          {staff.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* Grid */}
+      {selectedTeacher && (
+        <table
+          style={{
+            width: "100%",
+            borderCollapse: "separate",
+            borderSpacing: "10px",
+          }}
+        >
+          <thead>
+            <tr>
+              <th style={{ padding: "8px" }}>Period</th>
+              {DAYS.map((day) => (
+                <th key={day} style={{ padding: "8px", textTransform: "capitalize" }}>
+                  {day}
+                </th>
+              ))}
+            </tr>
+          </thead>
+
+          <tbody>
+            {PERIODS.map((period) => (
+              <tr key={period}>
+                <td style={{ fontWeight: "bold", textAlign: "center" }}>
+                  {period}
+                </td>
+
+                {DAYS.map((day) => {
+                  const item = getClass(day, period);
+
+                  return (
+                   <td
+                    key={day}
+                    style={{
+                        minWidth: "140px",
+                        height: "90px",
+                        verticalAlign: "top",
+                        background: "#f9fafb",
+                        borderRadius: "10px",
+                        padding: "10px",
+                        border: "1px solid #e5e7eb",
+                        position: "relative",
+                    }}
+                    >
+                    {item ? (
+                        <div style={{ fontSize: "13px" }}>
+                        <strong style={{ display: "block", marginBottom: "4px" }}>
+                            {item.subject}
+                        </strong>
+
+                        <span style={{ display: "block", color: "#555" }}>
+                            {item.staff_name || "No Teacher"}
+                        </span>
+
+                        <small style={{ display: "block", marginTop: "4px", color: "#777" }}>
+                            {item.service_type}
+                        </small>
+
+                        {item.is_pullout && (
+                            <div
+                            style={{
+                                marginTop: "6px",
+                                fontSize: "11px",
+                                color: "#b91c1c",
+                                fontWeight: "bold",
+                            }}
+                            >
+                            PULL OUT
+                            </div>
+                        )}
+
+                        {/* NEW: student count badge */}
+                        <div
+                            style={{
+                            position: "absolute",
+                            top: "6px",
+                            right: "6px",
+                            background: "#111827",
+                            color: "white",
+                            fontSize: "11px",
+                            padding: "2px 6px",
+                            borderRadius: "999px",
+                            }}
+                        >
+                            {getStudentCount(day, period)}
+                        </div>
+                        </div>
+                    ) : (
+                        <span style={{ color: "#ccc" }}>—</span>
+                    )}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
