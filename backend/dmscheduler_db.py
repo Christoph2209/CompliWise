@@ -1,7 +1,7 @@
 """
 dmscheduler_db.py
 
-Database setup for DMScheduler / CompliSched.
+Database setup for CompliWise.
 
 Creates tables for:
 - Student
@@ -15,7 +15,7 @@ Creates tables for:
 - LegalRule
 - ApprovalAction
 - AuditLog
-- Base44 sync tracking
+- User
 
 Install:
     pip install sqlalchemy psycopg2-binary python-dotenv

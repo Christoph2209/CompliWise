@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from dmscheduler_db import SessionLocal
 from dmscheduler_db import ScheduleEntry, Student, StaffMember, ComplianceFlag, FlexGroup, ScheduleRun, FlexGroupStudent
 
-from db_client import (
+from database_service import (
     DBAPIError,
     DBConfigError,
     create_compliance_flags,
@@ -24,7 +24,7 @@ from scheduler import schedule_iep_services_first
 
 load_dotenv()
 
-app = FastAPI(title="CompliSched Scheduler Engine")
+app = FastAPI(title="CompliWise Scheduler Engine")
 
 app.add_middleware(
     CORSMiddleware,
@@ -215,12 +215,15 @@ def get_student_schedule(student_id: str):
 @app.get("/")
 def root():
     return {
-        "message": "CompliSched Scheduler Engine is running",
+        "message": "CompliWise Scheduler Engine is running",
         "endpoints": [
-            "/test-base44",
-            "/preview-priority",
+            "/students",
+            "/staff",
+            "/schedule",
             "/generate-schedule",
-            "/sync-and-generate",
+            "/save-schedule",
+            "/compliance-flags",
+            "/flex_groups",
         ],
     }
 
@@ -229,8 +232,8 @@ def root():
 @app.get("/preview-priority")
 def preview_priority():
     """
-    Reads students from Base44 and shows the priority order.
-    Does NOT write anything back to Base44.
+    Calculates student scheduling priority order.
+    Does not save schedule changes.
     """
     try:
         students = get_students()
@@ -252,7 +255,7 @@ def preview_priority():
 
     except (DBConfigError, DBAPIError) as error:
         raise HTTPException(status_code=500, detail=str(error))
-
+    
 from dmscheduler_db import ScheduleEntry, SessionLocal
 
 @app.put("/schedule/{entry_id}")
@@ -326,11 +329,10 @@ def generate_schedule_preview():
     except (DBConfigError, DBAPIError) as error:
         raise HTTPException(status_code=500, detail=str(error))
 
-@app.post("/sync-and-generate")
-def sync_and_generate():
+@app.post("/save-schedule")
+def save_schedule():
     """
-    Generates schedules and stores everything internally.
-    No Base44 dependency in compliance logic.
+    Generates schedules and stores them in the scheduler database.
     """
 
     try:
@@ -390,7 +392,7 @@ def sync_and_generate():
 def reset_generated_schedules():
     """
     Deletes generated schedule output records.
-    Keeps Base44 students/staff intact.
+    Student and staff records remain unchanged.
     """
 
     try:

@@ -887,7 +887,7 @@ export default function App() {
               fontSize: 16, fontWeight: 800, color: C.white
             }}>C</div>
             <div>
-              <div style={{ color: C.white, fontWeight: 800, fontSize: 15 }}>CompliSched</div>
+              <div style={{ color: C.white, fontWeight: 800, fontSize: 15 }}>CompliWise</div>
               <div style={{ color: C.gray400, fontSize: 10 }}>IEP-First Scheduling</div>
             </div>
           </div>
@@ -944,7 +944,7 @@ export default function App() {
             background: "none", border: "none", cursor: "pointer", fontSize: 18, color: C.gray500
           }}>☰</button>
           <div style={{ flex: 1, fontSize: 14, fontWeight: 600, color: C.gray700 }}>
-            {NAV_ITEMS.find(n => n.id === page)?.label || "CompliSched"}
+            {NAV_ITEMS.find(n => n.id === page)?.label || "CompliWise"}
           </div>
           <Badge label="SY 2025–2026" color="blue" />
           <Badge label="IEP First ✓" color="purple" />

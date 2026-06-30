@@ -1,4 +1,4 @@
-# db_client.py
+# database_service.py
 
 import uuid
 from typing import Any, Dict, List

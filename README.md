@@ -1,145 +1,321 @@
-# CompliSched Scheduler Engine
+# CompliWise Scheduler Engine
 
-This is the FastAPI backend that connects to the Base44 CompliSched app.
+CompliWise is an automated school scheduling engine designed to generate compliant student schedules while prioritizing IEP services, intervention groups, staff availability, and scheduling constraints.
 
-The Base44 app stores:
+The scheduler runs as a standalone FastAPI backend with its own database and API layer.
 
-- `Student`
-- `StaffMember`
-- `ScheduleEntry`
-- `ScheduleProposal`
-- `ComplianceFlag`
-- `FlexGroup`
-- `LegalRule`
+## Features
 
-This backend reads Base44 student/staff records, prioritizes students with IEP services first, generates schedule entries, and can write schedule proposals and compliance flags back to Base44.
+* Automated student scheduling
+* IEP service prioritization
+* Service-minute compliance tracking
+* Staff availability handling
+* Student/staff conflict prevention
+* Flex/WIN group scheduling
+* Schedule proposals and validation
+* Compliance flag generation
+* Teacher attendance support
+* Role-based access support
+
+## Tech Stack
+
+Backend:
+
+* FastAPI
+* SQLAlchemy
+* PostgreSQL
+* Alembic migrations
+
+Frontend:
+
+* React + TypeScript
+
+Database:
+
+* PostgreSQL
 
 ## Setup
 
+Clone the repository:
+
 ```bash
-mkdir scheduler-engine
+git clone <repository-url>
 cd scheduler-engine
+```
+
+Create a virtual environment:
+
+```bash
 python -m venv venv
+```
+
+Activate:
+
+Windows:
+
+```bash
 venv\Scripts\activate
+```
+
+Mac/Linux:
+
+```bash
+source venv/bin/activate
+```
+
+Install dependencies:
+
+```bash
 pip install -r requirements.txt
 ```
 
-Copy `.env.example` to `.env`:
+Create your environment file:
+
+Windows:
 
 ```bash
 copy .env.example .env
 ```
 
-Edit `.env`:
+Mac/Linux:
+
+```bash
+cp .env.example .env
+```
+
+Configure:
 
 ```env
-BASE44_BASE_URL=https://compli-sched.base44.app/api
-BASE44_API_KEY=your_real_api_key_here
+DATABASE_URL=postgresql://username:password@localhost/compli_sched
 SCHOOL_YEAR=2026-2027
 ```
 
-## Run
+## Database Setup
+
+Run migrations:
+
+```bash
+alembic upgrade head
+```
+
+If starting with a fresh installation:
+
+```bash
+python create_database.py
+```
+
+## Running the Server
+
+Start FastAPI:
 
 ```bash
 uvicorn main:app --reload
 ```
 
-Open:
+API documentation:
 
 ```text
 http://127.0.0.1:8000/docs
 ```
 
-## Safe testing order
+## Scheduling Workflow
 
-### 1. Confirm API is running
+### 1. Load Data
 
-```text
-GET /
-```
+Import:
 
-### 2. Confirm Base44 connection
+* Students
+* Staff members
+* Courses
+* Service requirements
+* Availability
+* Scheduling rules
 
-```text
-GET /test-base44
-```
+### 2. Generate Schedule Preview
 
-Expected:
-
-```json
-{
-  "success": true,
-  "students_found": 123,
-  "staff_found": 20
-}
-```
-
-### 3. Preview priority order
-
-```text
-GET /preview-priority
-```
-
-This reads Base44 students and returns the IEP-first priority order.
-
-It does **not** write anything back to Base44.
-
-### 4. Generate schedule preview
+Run the scheduler:
 
 ```text
 POST /generate-schedule
 ```
 
-This generates:
+The scheduler creates:
 
-- `schedule_entries`
-- `schedule_proposals`
-- `compliance_flags`
+* Schedule entries
+* Schedule proposals
+* Compliance checks
 
-It does **not** save anything back to Base44.
+No existing schedules are overwritten during preview mode.
 
-### 5. Save generated schedule to Base44
+### 3. Review Compliance
 
-Only run this after inspecting the preview:
+The engine checks for:
 
-```text
-POST /sync-and-generate
+* Missing IEP minutes
+* Student conflicts
+* Provider conflicts
+* Invalid placements
+* Capacity issues
+
+Example:
+
+```json
+{
+  "student": "John Smith",
+  "issue": "Missing 30 minutes of speech service",
+  "severity": "high"
+}
 ```
 
-This writes to Base44:
+### 4. Publish Schedule
 
-- `ScheduleEntry`
-- `ScheduleProposal`
-- `ComplianceFlag`
+After review:
 
-## Important warning
+```text
+POST /publish-schedule
+```
 
-Do not call Base44 DELETE endpoints unless you are absolutely sure.
-The Base44 API supports deleting multiple records, and an empty query can delete all records in an entity.
+This commits the generated schedule to the database.
 
-## Current algorithm
+---
 
-Version 1 uses a greedy IEP-first scheduler:
+# Scheduling Algorithm
 
-1. Pull active students from Base44.
-2. Pull active staff from Base44.
-3. Rank students by priority:
-   - IEP students first
-   - More IEP services
-   - More required service minutes
-   - ENL required minutes
-   - MTSS tier 3 / tier 2
-4. Schedule IEP service sessions first.
-5. Avoid double-booking:
-   - student
-   - service provider
-6. Return service gaps as `ComplianceFlag` records.
+## Current Version: Greedy Constraint Scheduler
 
-## Next improvements
+Students are ranked by scheduling priority.
 
-- Add provider availability from `StaffMember.schedule`
-- Add room availability
-- Schedule ENL minutes explicitly
-- Schedule MTSS/Flex groups
-- Add normal general education class filling
-- Replace greedy scheduling with OR-Tools constraint optimization
+Priority order:
+
+1. IEP students
+2. Students with higher service minutes
+3. Students with more required providers
+4. ENL requirements
+5. MTSS Tier 3
+6. MTSS Tier 2
+
+The scheduler then places required services first.
+
+## Scheduling Rules
+
+The engine prevents:
+
+Student conflicts:
+
+* A student cannot be scheduled twice in the same period.
+
+Staff conflicts:
+
+* A provider cannot serve multiple students/groups at the same time.
+
+Service violations:
+
+* Required minutes are tracked.
+
+Capacity violations:
+
+* Groups cannot exceed limits.
+
+## Flex / WIN Scheduling
+
+Flex groups are generated after required services.
+
+The scheduler:
+
+* Creates intervention groups
+* Assigns students
+* Assigns available staff
+* Places groups into available periods
+
+## Compliance Engine
+
+The compliance engine creates flags when schedules violate rules.
+
+Examples:
+
+* Missing IEP minutes
+* No available provider
+* Staff overload
+* Student conflict
+* Room conflict
+
+---
+
+# API Endpoints
+
+## Health Check
+
+```http
+GET /
+```
+
+Returns API status.
+
+---
+
+## Students
+
+```http
+GET /students
+```
+
+Returns all students.
+
+```http
+POST /students
+```
+
+Creates a student.
+
+---
+
+## Staff
+
+```http
+GET /staff
+```
+
+Returns available staff.
+
+---
+
+## Scheduler
+
+Generate schedule:
+
+```http
+POST /generate-schedule
+```
+
+Preview schedule:
+
+```http
+GET /schedule-preview
+```
+
+Publish:
+
+```http
+POST /publish-schedule
+```
+
+---
+
+# Future Improvements
+
+Planned improvements:
+
+* OR-Tools constraint optimization
+* Automatic classroom assignment
+* Room capacity management
+* Better teacher availability parsing
+* Parent-facing schedule portal
+* Teacher attendance dashboard
+* Historical scheduling analytics
+* Multi-school support
+
+---
+
+# Project Goal
+
+CompliWise aims to reduce the manual work required to build school schedules while improving compliance with student service requirements and staffing limitations.
