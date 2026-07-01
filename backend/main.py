@@ -1,6 +1,5 @@
 import os
 
-
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi import HTTPException, Query, Depends
@@ -21,6 +20,20 @@ from database_service import (
     create_flex_group_students,
 )
 from scheduler import schedule_iep_services_first
+from passlib.context import CryptContext
+from sqlalchemy.orm import Session
+from pydantic import BaseModel
+
+    
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 load_dotenv()
 
@@ -36,10 +49,37 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from sqlalchemy.orm import Session
-from pydantic import BaseModel
-from dmscheduler_db import SessionLocal
+def hash_password(password: str):
+    return pwd_context.hash(password)
 
+def verify_password(plain, hashed):
+    return pwd_context.verify(plain, hashed)
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+@app.post("/login")
+def login(data: LoginRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == data.email).first()
+
+    if not user or not verify_password(data.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    return {
+        "user_id": str(user.id),
+        "role": user.role,
+        "staff_id": str(user.staff_id) if user.staff_id else None
+    }
+    
+
+def get_current_user():
+    # TEMP SIMPLE VERSION (later replace with JWT)
+    return {
+        "user_id": None,
+        "role": "admin"
+    }
+    
 class StudentUpdate(BaseModel):
     first_name: str | None = None
     last_name: str | None = None
@@ -47,13 +87,7 @@ class StudentUpdate(BaseModel):
     homeroom: str | None = None
     has_iep: bool | None = None
     mtss_tier: int | None = None
-    
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+
 
 @app.put("/students/{student_id}")
 def update_student(student_id: str, student: StudentUpdate):
@@ -81,7 +115,8 @@ def list_students(
     search: str | None = None,
     grade: int | None = None,
     iep: bool | None = None,
-    mtss_tier: int | None = None
+    mtss_tier: int | None = None,
+    user=Depends(get_current_user)
 ):
 
     try:
@@ -308,6 +343,18 @@ def list_flex_groups():
         ]
     finally:
         db.close()
+
+@app.get("/my-schedule")
+def my_schedule(user=Depends(get_current_user), db: Session = Depends(get_db)):
+
+    if user["role"] != "teacher":
+        raise HTTPException(status_code=403, detail="Not allowed")
+
+    entries = db.query(ScheduleEntry).filter(
+        ScheduleEntry.staff_id == user["staff_id"]
+    ).all()
+
+    return entries
 
 @app.post("/generate-schedule")
 def generate_schedule_preview():

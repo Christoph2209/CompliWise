@@ -8,24 +8,28 @@ import StudentSchedules from "./pages/StudentSchedules";
 import CompliancePage from "./pages/Compliance";
 import Dashboard from "./pages/Dashboard";
 import FlexGroups from "./pages/FlexGroups";
+import Login from "./pages/LoginPage";
+import { AuthProvider } from "./context/authContext";
 
 function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        
-        <Route element={<AppLayout />}>
-          <Route path="/students" element={<Students />} />
-          <Route path="/staff" element={<Staff />} />
-          <Route path="/student-schedules" element={<StudentSchedules />} />
-          <Route path="/teacher-schedules" element={<TeacherSchedules />} />
-          <Route path="/compliance" element={<CompliancePage />} />
-          <Route path="/flex_groups" element={<FlexGroups />} />
-          <Route path="/" element={<Dashboard />} />
-        </Route>
+    <AuthProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route element={<AppLayout />}>
+            <Route path="/login" element={<Login />} />
 
-      </Routes>
-    </BrowserRouter>
+            <Route path="/students" element={<Students />} />
+            <Route path="/staff" element={<Staff />} />
+            <Route path="/student-schedules" element={<StudentSchedules />} />
+            <Route path="/teacher-schedules" element={<TeacherSchedules />} />
+            <Route path="/compliance" element={<CompliancePage />} />
+            <Route path="/flex_groups" element={<FlexGroups />} />
+            <Route path="/" element={<Dashboard />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
   );
 }
 

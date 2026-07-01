@@ -134,6 +134,11 @@ class StaffMember(Base):
     max_students_per_group: Mapped[int] = mapped_column(Integer, default=30)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=True
+    )
+    
     __table_args__ = (
         Index("idx_staff_school_title", "school_id", "title"),
         Index("idx_staff_school_grade", "school_id", "grade"),
@@ -394,6 +399,10 @@ class User(Base):
     school_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("schools.id"), nullable=False)
 
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False
+    )
     full_name: Mapped[Optional[str]] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(50), nullable=False)
 

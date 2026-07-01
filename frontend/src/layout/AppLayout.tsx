@@ -6,7 +6,7 @@ export default function AppLayout() {
       
       {/* Sidebar */}
       <aside style={styles.sidebar}>
-        <h2 style={{ marginBottom: 20 }}>DMScheduler</h2>
+        <h2 style={{ marginBottom: 20 }}>CompliWise</h2>
 
         <nav style={styles.nav}>
           <Link to="/" style={styles.link}>Dashboard</Link>
