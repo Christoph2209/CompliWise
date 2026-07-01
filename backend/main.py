@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi import HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from dmscheduler_db import SessionLocal
-from dmscheduler_db import ScheduleEntry, Student, StaffMember, ComplianceFlag, FlexGroup, ScheduleRun, FlexGroupStudent
+from dmscheduler_db import ScheduleEntry, Student, StaffMember, ComplianceFlag, FlexGroup, ScheduleRun, FlexGroupStudent, User
 
 from database_service import (
     DBAPIError,
@@ -33,7 +33,7 @@ def get_db():
         db.close()
 
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
 load_dotenv()
 
@@ -63,15 +63,15 @@ class LoginRequest(BaseModel):
 def login(data: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == data.email).first()
 
-    if not user or not verify_password(data.password, user.hashed_password):
+    if not user or not verify_password(data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     return {
         "user_id": str(user.id),
         "role": user.role,
-        "staff_id": str(user.staff_id) if user.staff_id else None
+        "staff_id": str(user.staff_id) if getattr(user, "staff_id", None) else None
     }
-    
+
 
 def get_current_user():
     # TEMP SIMPLE VERSION (later replace with JWT)

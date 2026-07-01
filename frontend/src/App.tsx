@@ -10,22 +10,29 @@ import Dashboard from "./pages/Dashboard";
 import FlexGroups from "./pages/FlexGroups";
 import Login from "./pages/LoginPage";
 import { AuthProvider } from "./context/authContext";
+import ProtectedRoute from "./components/ProtectedRoute";
 
 function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
         <Routes>
-          <Route element={<AppLayout />}>
-            <Route path="/login" element={<Login />} />
+          <Route path="/login" element={<Login />} />
 
+          <Route
+            element={
+              <ProtectedRoute>
+                <AppLayout />
+              </ProtectedRoute>
+            }
+          >
+            <Route path="/" element={<Dashboard />} />
             <Route path="/students" element={<Students />} />
             <Route path="/staff" element={<Staff />} />
             <Route path="/student-schedules" element={<StudentSchedules />} />
             <Route path="/teacher-schedules" element={<TeacherSchedules />} />
             <Route path="/compliance" element={<CompliancePage />} />
             <Route path="/flex_groups" element={<FlexGroups />} />
-            <Route path="/" element={<Dashboard />} />
           </Route>
         </Routes>
       </BrowserRouter>

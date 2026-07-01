@@ -4,7 +4,7 @@ import csv
 import uuid
 from pathlib import Path
 
-from dmscheduler_db import (
+from backend.dmscheduler_db import (
     SessionLocal,
     School,
     Student,
@@ -13,8 +13,8 @@ from dmscheduler_db import (
 )
 
 
-STUDENTS_CSV = "Student_export.csv"
-STAFF_CSV = "StaffMember_export.csv"  # change to workers.csv if needed
+STUDENTS_CSV = "./data/Student_export.csv"
+STAFF_CSV = "./data/StaffMember_export.csv"  # change to workers.csv if needed
 
 
 def yes_no(value):

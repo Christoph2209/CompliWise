@@ -28,18 +28,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const data = await res.json();
     setUser(data);
-    localStorage.setItem("user", JSON.stringify(data));
   };
 
   const logout = () => {
     setUser(null);
-    localStorage.removeItem("user");
   };
 
-  useEffect(() => {
-    const stored = localStorage.getItem("user");
-    if (stored) setUser(JSON.parse(stored));
-  }, []);
 
   return (
     <AuthContext.Provider value={{ user, login, logout }}>

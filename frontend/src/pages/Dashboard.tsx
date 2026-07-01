@@ -3,6 +3,7 @@ import { getStudents } from "../api/students";
 import { getStaff } from "../api/staff";
 import { getSchedule } from "../api/schedule";
 import { getComplianceFlags } from "../api/compliance";
+import { generateSchedule, resetSchedule } from "../api/schedule";
 import "../components/Dashboard.css";
 
 export default function Dashboard() {
@@ -41,8 +42,26 @@ export default function Dashboard() {
 
         <div className="actions">
           <button>🔄 Refresh</button>
-          <button>⚙️ Generate Schedule</button>
-          <button className="danger">🧹 Reset</button>
+          <button onClick={async () => {
+            try {
+              await generateSchedule();
+              alert("Schedule generated successfully!");
+              await load();
+            } catch (error) {
+              console.error("Error generating schedule:", error);
+            }
+          }}>⚙️ Generate Schedule</button>
+          <button className="danger" onClick={async () => {
+            try {
+              await resetSchedule();
+              alert("Schedule reset successfully!");
+              await load();
+            } catch (error) {
+              console.error("Error resetting schedule:", error);
+            }
+          }}>
+            🧹 Reset
+          </button>
         </div>
       </div>
 
