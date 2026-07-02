@@ -356,25 +356,6 @@ def my_schedule(user=Depends(get_current_user), db: Session = Depends(get_db)):
 
     return entries
 
-@app.post("/generate-schedule")
-def generate_schedule_preview():
-    """
-    Generates schedule payloads from Base44 data but does NOT save them.
-    Use this first so you can inspect the output safely.
-    """
-    try:
-        students = get_students()
-        staff = get_staff()
-        school_year = os.getenv("SCHOOL_YEAR", "2026-2027")
-
-        return schedule_iep_services_first(
-            students=students,
-            staff_members=staff,
-            school_year=school_year,
-        )
-
-    except (DBConfigError, DBAPIError) as error:
-        raise HTTPException(status_code=500, detail=str(error))
 
 @app.post("/save-schedule")
 def save_schedule():

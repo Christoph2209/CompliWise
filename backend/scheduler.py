@@ -397,11 +397,11 @@ def build_flex_groups(students, staff_members, schedule_index=None):
         if tier == "enrichment":
             max_size = MAX_FLEX_GROUP_SIZE["enrichment"]
             base_name = f"FLEX Enrichment - {focus_area}"
-            base44_tier = "tier_2"
+            mtss_tier = "tier_2"
         else:
             max_size = MAX_FLEX_GROUP_SIZE.get(tier, 10)
             base_name = f"FLEX {tier.upper()} - {focus_area}"
-            base44_tier = tier
+            mtss_tier = tier
 
         for i in range(0, len(bucket_students), max_size):
             chunk = bucket_students[i:i + max_size]
@@ -413,7 +413,7 @@ def build_flex_groups(students, staff_members, schedule_index=None):
             for day in DAYS:
                 groups.append({
                     "name": f"{base_name} Group {group_number}",
-                    "tier": base44_tier,
+                    "tier": mtss_tier,
                     "focus_area": focus_area,
                     "teacher": teacher,
                     "student_ids": [s["student_id"] for s in chunk],
