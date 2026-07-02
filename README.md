@@ -98,11 +98,6 @@ Run migrations:
 alembic upgrade head
 ```
 
-If starting with a fresh installation:
-
-```bash
-python create_database.py
-```
 
 ## Running the Server
 
