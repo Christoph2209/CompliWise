@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getSchedule } from "../api/schedule";
+import StudentModal from "../components/StudentModal";
 
 const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday"];
 const PERIODS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
@@ -12,6 +13,7 @@ const CACHE_TTL = 1000 * 60 * 5;
 export default function TeacherSchedules() {
   const [entries, setEntries] = useState<any[]>([]);
   const [selectedTeacher, setSelectedTeacher] = useState("");
+  const [selectedSlot, setSelectedSlot] = useState<any>(null);
 
   useEffect(() => {
     async function load() {
@@ -91,7 +93,7 @@ function getStudentCount(day: string, period: number) {
 }
   return (
     <div style={{ padding: "20px", fontFamily: "Arial, sans-serif" }}>
-      <h1 style={{ marginBottom: "16px" }}>Staff Schedules</h1>
+      <h1 style={{ marginBottom: "16px", color: "#000000" }}>Staff Schedules</h1>
 
       {/* Staff Selector */}
       <div style={{ marginBottom: "20px" }}>
@@ -149,17 +151,22 @@ function getStudentCount(day: string, period: number) {
                   return (
                    <td
                     key={day}
-                    style={{
-                        minWidth: "140px",
-                        height: "90px",
-                        verticalAlign: "top",
-                        background: "#f9fafb",
-                        borderRadius: "10px",
-                        padding: "10px",
-                        border: "1px solid #e5e7eb",
-                        position: "relative",
+                    onClick={() => {
+                      console.log("clicked", item);
+                      if (item) setSelectedSlot(item);
                     }}
-                    >
+                    style={{
+                      minWidth: "140px",
+                      height: "90px",
+                      verticalAlign: "top",
+                      background: item ? "#f9fafb" : "#fff",
+                      borderRadius: "10px",
+                      padding: "10px",
+                      border: "1px solid #e5e7eb",
+                      position: "relative",
+                      cursor: item ? "pointer" : "default",
+                    }}
+                  >
                     {item ? (
                         <div style={{ fontSize: "13px" }}>
                         <strong style={{ display: "block", marginBottom: "4px" }}>
@@ -214,6 +221,11 @@ function getStudentCount(day: string, period: number) {
           </tbody>
         </table>
       )}
+      <StudentModal
+        selectedSlot={selectedSlot}
+        teacherSchedule={teacherSchedule}
+        onClose={() => setSelectedSlot(null)}
+      />
     </div>
   );
 }

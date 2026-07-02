@@ -114,9 +114,10 @@ export default function FlexGroups() {
                         borderRadius: "12px",
                         padding: "25px",
                         boxShadow: "0 5px 20px #999",
+                        color: "#000000",
                     }}
                 >
-                    <h2>{selectedGroup.name}</h2>
+                    <h2 style={{ color: "black" }}>{selectedGroup.name}</h2>
                     <h3>Teacher</h3>
                     <p>{selectedGroup.staff_name}</p>
                     <h3>Students</h3>

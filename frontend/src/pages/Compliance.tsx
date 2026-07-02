@@ -43,7 +43,7 @@ export default function CompliancePage() {
 
   return (
     <div style={{ padding: "20px", fontFamily: "Arial" }}>
-      <h1>Compliance Dashboard</h1>
+      <h1 style={{ color: "#000000" }}>Compliance Dashboard</h1>
 
       <p style={{ color: "#666" }}>
         Live data from database (ComplianceFlag table)
@@ -70,15 +70,15 @@ export default function CompliancePage() {
                 key={issue.id}
                 style={{ background: getColor(issue.severity || issue.type) }}
               >
-                <td style={{ padding: "10px" }}>
+                <td style={{ padding: "10px", color: "#000000" }}>
                   {issue.student_name}
                 </td>
 
-                <td style={{ padding: "10px" }}>
+                <td style={{ padding: "10px", color: "#000000" }}>
                   {(issue.severity || issue.type)?.toUpperCase()}
                 </td>
 
-                <td style={{ padding: "10px" }}>
+                <td style={{ padding: "10px", color: "#000000" }}>
                   {issue.description || issue.message}
                 </td>
 
