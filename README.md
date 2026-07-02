@@ -86,7 +86,7 @@ cp .env.example .env
 Configure:
 
 ```env
-DATABASE_URL=postgresql://username:password@localhost/compli_sched
+DATABASE_URL=postgresql://username:password@localhost/compliwise_db
 SCHOOL_YEAR=2026-2027
 ```
 
