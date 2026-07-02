@@ -40,7 +40,7 @@ Clone the repository:
 
 ```bash
 git clone <repository-url>
-cd scheduler-engine
+cd CompliWise
 ```
 
 Create a virtual environment:
