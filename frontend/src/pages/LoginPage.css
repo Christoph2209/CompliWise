@@ -1,0 +1,135 @@
+.login-page {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  min-height: 100svh;
+  box-sizing: border-box;
+  background: linear-gradient(180deg, #3b5bdb 0%, #6a3db6 55%, #aa3bff 100%);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 360px;
+  padding: 40px 32px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+  text-align: left;
+}
+
+.login-title {
+  margin: 0 0 4px;
+  text-align: left;
+}
+
+.login-subtitle {
+  color: var(--text);
+  font-size: 15px;
+  margin: 0 0 28px;
+}
+
+.login-field {
+  margin-bottom: 20px;
+  transform: scale(1);
+  transform-origin: left center;
+  transition: transform 0.2s ease;
+}
+
+.login-field label {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-h);
+  margin-bottom: 6px;
+}
+
+.login-field input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  font: inherit;
+  font-size: 16px;
+  color: var(--text-h);
+  background: var(--bg);
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.login-field input::placeholder {
+  color: var(--text);
+  opacity: 0.6;
+}
+
+.login-field:hover {
+  transform: scale(1.03);
+}
+
+.login-field:hover input {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 4px var(--accent-bg);
+}
+
+.login-field input:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-bg);
+}
+
+.login-field:has(input:focus-visible) {
+  transform: scale(1.03);
+}
+
+.login-error {
+  color: #d63b3b;
+  font-size: 14px;
+  margin: -8px 0 16px;
+}
+
+.login-button {
+  width: 100%;
+  padding: 12px;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 500;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: opacity 0.2s ease, transform 0.1s ease;
+}
+
+.login-button:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.login-button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.login-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.login-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.login-forgot {
+  display: block;
+  margin-top: 16px;
+  font-size: 14px;
+  color: var(--accent);
+  text-align: center;
+  text-decoration: none;
+}
+
+.login-forgot:hover {
+  text-decoration: underline;
+}
