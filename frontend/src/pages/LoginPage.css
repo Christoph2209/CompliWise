@@ -7,6 +7,24 @@
   min-height: 100svh;
   box-sizing: border-box;
   background: linear-gradient(180deg, #3b5bdb 0%, #6a3db6 55%, #aa3bff 100%);
+  background-size: 100% 200%;
+  animation: gradient-drift 12s ease-in-out infinite;
+}
+@keyframes gradient-drift {
+  0% {
+    background-position: 0% 0%;
+  }
+  50% {
+    background-position: 0% 100%;
+  }
+  100% {
+    background-position: 0% 0%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .login-page {
+    animation: none;
+  }
 }
 
 .login-card {
