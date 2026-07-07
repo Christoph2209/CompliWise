@@ -136,3 +136,78 @@
 .action-btn:hover {
   background: #e0e7ff;
 }
+
+.schedule-table-container {
+    width: 100%;
+    overflow-x: auto;
+}
+
+
+.schedule-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 20px;
+}
+
+
+.schedule-table th {
+    padding: 14px;
+    text-align: center;
+    background: #111827;
+    color: white;
+}
+
+
+.schedule-table td {
+
+    border: 1px solid #ddd;
+    padding: 10px;
+    vertical-align: top;
+
+    min-width: 180px;
+    height: 120px;
+}
+
+
+.period-cell {
+
+    font-weight: bold;
+    text-align: center;
+    background: #f3f4f6;
+
+}
+
+
+.schedule-card {
+
+    background: #eef2ff;
+    border-radius: 8px;
+
+    padding: 10px;
+    margin-bottom: 8px;
+
+    font-size: 14px;
+
+}
+
+
+.schedule-card strong {
+
+    display:block;
+    margin-bottom:5px;
+
+}
+
+
+.schedule-card p {
+
+    margin:3px 0;
+
+}
+
+
+.empty {
+
+    color:#aaa;
+
+}

@@ -101,6 +101,12 @@ class Student(Base):
 
     services = relationship("StudentService", back_populates="student")
 
+    teachers = relationship(
+        "StaffMember",
+        secondary="student_teachers",
+        back_populates="students"
+    )
+    
     __table_args__ = (
         Index("idx_students_school_grade", "school_id", "grade"),
         Index("idx_students_external_id", "school_id", "external_student_id"),
@@ -131,15 +137,24 @@ class StaffMember(Base):
     max_students_per_group: Mapped[int] = mapped_column(Integer, default=30)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        ForeignKey("users.id"),
-        nullable=True
+    user = relationship(
+        "User",
+        back_populates="staff_member",
+        uselist=False,
+    )
+    
+    students = relationship(
+        "Student",
+        secondary="student_teachers",
+        back_populates="teachers"
     )
     
     __table_args__ = (
         Index("idx_staff_school_title", "school_id", "title"),
         Index("idx_staff_school_grade", "school_id", "grade"),
     )
+    
+    
 
 
 class StudentService(Base):
@@ -229,6 +244,14 @@ class ScheduleEntry(Base):
     student_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("students.id"), nullable=False)
     staff_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("staff_members.id"))
 
+    staff_member = relationship(
+        "StaffMember"
+    )
+
+    student = relationship(
+        "Student"
+    )
+    
     # Helpful denormalized display/search fields
     student_external_id: Mapped[Optional[str]] = mapped_column(String(100))
     student_name: Mapped[Optional[str]] = mapped_column(String(255))
@@ -253,7 +276,7 @@ class ScheduleEntry(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     schedule_run = relationship("ScheduleRun", back_populates="entries")
-
+    
     __table_args__ = (
         UniqueConstraint(
             "run_id",
@@ -393,20 +416,49 @@ class User(Base):
 
     id: Mapped[uuid.UUID] = uuid_pk()
 
-    school_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("schools.id"), nullable=False)
+    school_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("schools.id"),
+        nullable=False,
+    )
 
-    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    email: Mapped[str] = mapped_column(
+        String(255),
+        unique=True,
+        nullable=False,
+    )
+
     password_hash: Mapped[str] = mapped_column(
         String(255),
-        nullable=False
+        nullable=False,
     )
+
     full_name: Mapped[Optional[str]] = mapped_column(String(255))
-    role: Mapped[str] = mapped_column(String(50), nullable=False)
 
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    role: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+    )
 
+    staff_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("staff_members.id"),
+        unique=True,
+        nullable=True,
+    )
 
+    staff_member = relationship(
+        "StaffMember",
+        back_populates="user",
+    )
+
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+    )
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 
@@ -425,3 +477,31 @@ class AuditLog(Base):
     ip_address: Mapped[Optional[str]] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
+
+class StudentTeacher(Base):
+    __tablename__ = "student_teachers"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("students.id", ondelete="CASCADE"),
+        nullable=False
+    )
+
+    staff_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("staff_members.id", ondelete="CASCADE"),
+        nullable=False
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "student_id",
+            "staff_id",
+            name="uq_student_teacher"
+        ),
+    )

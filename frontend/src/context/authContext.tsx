@@ -1,49 +1,144 @@
-import { createContext, useContext, useState, useEffect } from "react";
+import {
+  createContext,
+  useContext,
+  useState
+} from "react";
 
-type User = {
-  user_id: string;
-  role: "admin" | "principal" | "teacher" | "aide";
-  staff_id?: string;
-};
+import type { User } from "./authTypes";
 
 type AuthContextType = {
+
   user: User | null;
-  login: (email: string, password: string) => Promise<void>;
+
+  login: (
+    email: string,
+    password: string
+  ) => Promise<void>;
+
   logout: () => void;
+
 };
 
-const AuthContext = createContext<AuthContextType | null>(null);
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
 
-  const login = async (email: string, password: string) => {
-    const res = await fetch("http://localhost:8000/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
+const AuthContext =
+  createContext<AuthContextType | null>(null);
+
+
+
+export function AuthProvider({
+  children
+}:{
+  children: React.ReactNode;
+}) {
+
+
+  const [user,setUser] =
+    useState<User | null>(() => {
+
+      const saved =
+        localStorage.getItem("user");
+
+      return saved
+        ? JSON.parse(saved)
+        : null;
+
     });
 
-    if (!res.ok) throw new Error("Login failed");
 
-    const data = await res.json();
+
+  async function login(
+    email:string,
+    password:string
+  ){
+
+
+    const response =
+      await fetch(
+        "http://localhost:8000/login",
+        {
+          method:"POST",
+          headers:{
+            "Content-Type":"application/json"
+          },
+          body:JSON.stringify({
+            email,
+            password
+          })
+        }
+      );
+
+
+    if(!response.ok){
+      throw new Error(
+        "Login failed"
+      );
+    }
+
+
+    const data =
+      await response.json();
+
+
     setUser(data);
-  };
 
-  const logout = () => {
+
+    localStorage.setItem(
+      "user",
+      JSON.stringify(data)
+    );
+
+  }
+
+
+
+  function logout(){
+
     setUser(null);
-  };
+
+    localStorage.removeItem(
+      "user"
+    );
+
+  }
+
 
 
   return (
-    <AuthContext.Provider value={{ user, login, logout }}>
+
+    <AuthContext.Provider
+      value={{
+        user,
+        login,
+        logout
+      }}
+    >
+
       {children}
+
     </AuthContext.Provider>
+
   );
+
 }
 
-export const useAuth = () => {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error("useAuth must be used inside AuthProvider");
-  return ctx;
-};
+
+
+export function useAuth(){
+
+  const context =
+    useContext(AuthContext);
+
+
+  if(!context){
+
+    throw new Error(
+      "useAuth must be used inside AuthProvider"
+    );
+
+  }
+
+
+  return context;
+
+}
