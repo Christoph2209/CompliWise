@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { getSchedule } from "../api/schedule";
 import StudentModal from "../components/StudentModal";
 
-const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday"];
+const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 const PERIODS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
 const CACHE_KEY = "schedule_cache_v1";

@@ -101,11 +101,6 @@ class Student(Base):
 
     services = relationship("StudentService", back_populates="student")
 
-    teachers = relationship(
-        "StaffMember",
-        secondary="student_teachers",
-        back_populates="students"
-    )
     
     __table_args__ = (
         Index("idx_students_school_grade", "school_id", "grade"),
@@ -141,12 +136,6 @@ class StaffMember(Base):
         "User",
         back_populates="staff_member",
         uselist=False,
-    )
-    
-    students = relationship(
-        "Student",
-        secondary="student_teachers",
-        back_populates="teachers"
     )
     
     __table_args__ = (
@@ -477,31 +466,3 @@ class AuditLog(Base):
     ip_address: Mapped[Optional[str]] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-
-class StudentTeacher(Base):
-    __tablename__ = "student_teachers"
-
-    id: Mapped[uuid.UUID] = uuid_pk()
-
-    student_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("students.id", ondelete="CASCADE"),
-        nullable=False
-    )
-
-    staff_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("staff_members.id", ondelete="CASCADE"),
-        nullable=False
-    )
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        default=datetime.utcnow
-    )
-
-    __table_args__ = (
-        UniqueConstraint(
-            "student_id",
-            "staff_id",
-            name="uq_student_teacher"
-        ),
-    )
