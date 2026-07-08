@@ -19,10 +19,10 @@ db.flush()  # gets school.id without committing
 user = User(
     id=uuid.uuid4(),
     school_id=school.id,
-    email="lchen@school.com",
-    full_name="Linda Chen",
-    role="teacher",
-    password_hash=ph.hash("lc22")
+    email="a",
+    full_name="me",
+    role="admin",
+    password_hash=ph.hash("password123")
 )
 
 db.add(user)
