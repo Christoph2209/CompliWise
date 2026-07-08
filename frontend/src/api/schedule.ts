@@ -19,6 +19,16 @@ export async function generateSchedule() {
   return res.json();
 }
 
+export async function getMySchedule() {
+  const res = await fetch("http://localhost:8000/my-schedule", {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+  return res.json();
+}
+
 export async function resetSchedule() {
   const res = await fetch("http://localhost:8000/reset-generated-schedules", {
     method: "POST",

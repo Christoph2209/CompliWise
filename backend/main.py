@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi import HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from dmscheduler_db import SessionLocal
-from dmscheduler_db import ScheduleEntry, Student, StaffMember, ComplianceFlag, FlexGroup, ScheduleRun, FlexGroupStudent, User
+from dmscheduler_db import ScheduleEntry, Student, StaffMember, ComplianceFlag, FlexGroup, ScheduleRun, FlexGroupStudent, User, StudentTeacher
 
 from database_service import (
     DBAPIError,
@@ -24,7 +24,8 @@ from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
-    
+CURRENT_USER = None
+
 def get_db():
     db = SessionLocal()
     try:
@@ -61,25 +62,113 @@ class LoginRequest(BaseModel):
 
 @app.post("/login")
 def login(data: LoginRequest, db: Session = Depends(get_db)):
+    global CURRENT_USER
+
     user = db.query(User).filter(User.email == data.email).first()
 
     if not user or not verify_password(data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
+    CURRENT_USER = user.id
+
     return {
         "user_id": str(user.id),
         "role": user.role,
-        "staff_id": str(user.staff_id) if getattr(user, "staff_id", None) else None
+        "staff_id": str(user.staff_id) if user.staff_id else None
     }
 
 
-def get_current_user():
-    # TEMP SIMPLE VERSION (later replace with JWT)
+def get_current_user(db: Session = Depends(get_db)):
+
+    if CURRENT_USER is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Not logged in"
+        )
+
+    user = (
+        db.query(User)
+        .filter(User.id == CURRENT_USER)
+        .first()
+    )
+
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found"
+        )
+
+    return user
+    
+    
+@app.get("/me")
+def get_me(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+
+    staff = None
+
+    if user.staff_id:
+        staff = (
+            db.query(StaffMember)
+            .filter(StaffMember.id == user.staff_id)
+            .first()
+        )
     return {
-        "user_id": None,
-        "role": "admin"
+        "id": str(user.id),
+        "email": user.email,
+        "role": user.role,
+        "staff_member": {
+            "id": str(staff.id),
+            "first_name": staff.first_name,
+            "last_name": staff.last_name
+        } if staff else None
     }
     
+@app.get("/me/students")
+def get_my_students(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+
+    if user.role != "teacher":
+        raise HTTPException(
+            status_code=403,
+            detail="Not allowed"
+        )
+
+    if not user.staff_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Teacher account is not linked to staff member"
+        )
+
+    students = (
+        db.query(Student)
+        .join(
+            StudentTeacher,
+            StudentTeacher.student_id == Student.id
+        )
+        .filter(
+            StudentTeacher.staff_id == user.staff_id
+        )
+        .all()
+    )
+
+    return [
+        {
+            "id": str(s.id),
+            "first_name": s.first_name,
+            "last_name": s.last_name,
+            "grade": s.grade,
+            "homeroom": s.homeroom,
+            "has_iep": s.has_iep,
+            "mtss_tier": s.mtss_tier
+        }
+        for s in students
+    ]
+
 class StudentUpdate(BaseModel):
     first_name: str | None = None
     last_name: str | None = None
@@ -345,16 +434,44 @@ def list_flex_groups():
         db.close()
 
 @app.get("/my-schedule")
-def my_schedule(user=Depends(get_current_user), db: Session = Depends(get_db)):
+def my_schedule(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
 
-    if user["role"] != "teacher":
-        raise HTTPException(status_code=403, detail="Not allowed")
+    if user.role != "teacher":
+        raise HTTPException(
+            status_code=403,
+            detail="Not allowed"
+        )
 
-    entries = db.query(ScheduleEntry).filter(
-        ScheduleEntry.staff_id == user["staff_id"]
-    ).all()
+    if not user.staff_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Teacher account is not linked"
+        )
 
-    return entries
+    entries = (
+        db.query(ScheduleEntry)
+        .filter(
+            ScheduleEntry.staff_id == user.staff_id
+        )
+        .all()
+    )
+
+    return [
+        {
+            "id": str(e.id),
+            "day_of_week": e.day_of_week,
+            "period": e.period,
+            "subject": e.subject,
+            "student_name": e.student_name,
+            "service_type": e.service_type,
+            "is_pullout": e.is_pullout,
+            "is_flex_period": e.is_flex_period
+        }
+        for e in entries
+    ]
 
 
 @app.post("/save-schedule")
