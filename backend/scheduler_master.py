@@ -9,9 +9,9 @@ Periods are NOT one-size-fits-all across the whole school anymore.
 The real bell schedule has 7 periods/day, and FLEX / Lunch-Recess /
 Language Block are staggered by grade GROUP so that:
 
-    K/1  -> FLEX, then Lunch/Recess
-    2/3  -> FLEX, then Lunch/Recess (one period later)
-    4/5  -> FLEX, then Lunch/Recess (two periods later)
+    K/1  -> FLEX, then Lunch/Recess, then Language Block
+    2/3  -> FLEX, then Lunch/Recess, then Language Block  (one period later)
+    4/5  -> FLEX, then Lunch/Recess, then Language Block  (two periods later)
 
 This stagger is the whole point: it's what keeps FLEX groups (which pull
 from a single grade group) from all landing in the same slot school-wide
@@ -70,9 +70,9 @@ DEFAULT_GRADE_GROUPS = {
 }
 
 DEFAULT_GROUP_PERIODS = {
-    "K/1": {"flex": 3, "lunch": 4},
-    "2/3": {"flex": 4, "lunch": 5},
-    "4/5": {"flex": 5, "lunch": 6},
+    "K/1": {"flex": 3, "lunch": 4, "language_block": 5},
+    "2/3": {"flex": 4, "lunch": 5, "language_block": 6},
+    "4/5": {"flex": 5, "lunch": 6, "language_block": 7},
 }
 
 # Fallback subject pattern for periods that are neither FLEX, Lunch/
@@ -134,7 +134,7 @@ class PeriodConfig:
             raise ValueError("PeriodConfig needs at least one grade group defined")
 
         for group, assignment in self.group_periods.items():
-            for key in ("flex", "lunch"):
+            for key in ("flex", "lunch", "language_block"):
                 if key not in assignment:
                     raise ValueError(
                         f"Grade group '{group}' is missing a '{key}' period assignment"
@@ -142,13 +142,15 @@ class PeriodConfig:
 
             flex_p = assignment["flex"]
             lunch_p = assignment["lunch"]
+            lang_p = assignment["language_block"]
 
-            if len({flex_p, lunch_p}) != 2:
+            if len({flex_p, lunch_p, lang_p}) != 3:
                 raise ValueError(
-                    f"Grade group '{group}' has overlapping flex/lunch periods: {assignment}"
+                    f"Grade group '{group}' has overlapping flex/lunch/"
+                    f"language_block periods: {assignment}"
                 )
 
-            for p in (flex_p, lunch_p):
+            for p in (flex_p, lunch_p, lang_p):
                 if p not in self.periods:
                     raise ValueError(
                         f"Grade group '{group}' references period {p}, which "
@@ -186,6 +188,9 @@ class PeriodConfig:
     def lunch_period(self, student: Dict[str, Any]) -> int:
         return self.group_periods[self.get_group_for_student(student)]["lunch"]
 
+    def language_block_period(self, student: Dict[str, Any]) -> int:
+        return self.group_periods[self.get_group_for_student(student)]["language_block"]
+
     def core_periods(self, student: Dict[str, Any]) -> Set[int]:
         """Periods that count as protected core instruction for THIS
         student's group -- everything except that group's own FLEX and
@@ -201,6 +206,8 @@ class PeriodConfig:
             return "FLEX"
         if period == self.lunch_period(student):
             return "Lunch/Recess"
+        if period == self.language_block_period(student):
+            return "Language Block"
         return self.general_ed_pattern.get(period, "Core Instruction")
 
 
@@ -260,6 +267,7 @@ FLEX_FOCUS_BY_NEED = {
     "math": "math",
     "writing": "writing",
     "behavior": "behavior",
+    "enl": "enl_support",
 }
 
 MAX_SERVICE_GROUP_SIZE = {
@@ -466,6 +474,9 @@ def get_flex_focus_area(student):
     For enrichment students (no MTSS tier), still derive a focus area
     from grade or homeroom so groups are descriptive and spreadable.
     """
+    enl_level = student.get("enl_level")
+    if enl_level and enl_level != "none":
+        return "enl_support"
 
     services = student.get("iep_services") or []
     services_text = str(services).lower()
@@ -490,16 +501,13 @@ def get_flex_focus_area(student):
     return "general"
 
 
-def pick_flex_teacher(focus_area: str, staff_members: list, load_fn=None, exclude: set = None) -> str:
-    exclude = exclude or set()
-
+def pick_flex_teacher(focus_area: str, staff_members: list, load_fn=None) -> str:
     def load(name):
         if load_fn is None:
             return 0
         return load_fn(name)
 
     def best(candidates):
-        candidates = [c for c in candidates if c not in exclude]   # ← never reuse a teacher already at this period
         if not candidates:
             return ""
         return min(candidates, key=load)
@@ -532,6 +540,8 @@ def pick_flex_teacher(focus_area: str, staff_members: list, load_fn=None, exclud
         and staff_full_name(s)
     })
 
+    if focus_area == "enl_support":
+        return best(enl_certified) or best(all_instructional)
     if focus_area in ("reading", "writing"):
         return best(setss_qualified) or best(gen_ed) or best(ict) or best(all_instructional)
     if focus_area == "math":
@@ -554,7 +564,6 @@ def build_flex_groups(students, staff_members, period_config: PeriodConfig, sche
     groups = []
     buckets = {}
     flex_load = {}
-    used_teachers_by_period = {}
 
     def load_fn(name):
         return flex_load.get(name, 0)
@@ -564,11 +573,6 @@ def build_flex_groups(students, staff_members, period_config: PeriodConfig, sche
         if not student_id:
             continue
 
-        # ENL is scheduled independently through ENL services.
-        # It should never create a FLEX group.
-        if student.get("enl_minutes_required", 0) > 0 and not student.get("mtss_tier"):
-            continue
-        
         grade_group = period_config.get_group_for_student(student)
         mtss_tier = student.get("mtss_tier")
         focus_area = get_flex_focus_area(student)
@@ -591,17 +595,12 @@ def build_flex_groups(students, staff_members, period_config: PeriodConfig, sche
             mtss_tier = tier
 
         flex_period = period_config.group_periods[grade_group]["flex"]
-        already_used = used_teachers_by_period.setdefault(flex_period, set())
 
         for i in range(0, len(bucket_students), max_size):
             chunk = bucket_students[i:i + max_size]
             group_number = (i // max_size) + 1
 
-            teacher = pick_flex_teacher(focus_area, staff_members, load_fn=load_fn, exclude=already_used)
-            if not teacher:
-                continue
-            
-            already_used.add(teacher)
+            teacher = pick_flex_teacher(focus_area, staff_members, load_fn=load_fn)
             flex_load[teacher] = flex_load.get(teacher, 0) + 1
 
             for day in DAYS:
@@ -631,8 +630,7 @@ def validate_class_sizes(entries):
             continue
         if entry.get("service_type") != "general_ed":
             continue
-        if entry.get("subject") in ("FLEX", "Lunch/Recess"):
-            continue
+
         key = (
             entry.get("teacher", ""),
             entry.get("day_of_week"),
@@ -900,6 +898,24 @@ def get_student_services(student: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "minutes": 30,
                 "is_pullout": True
             })
+
+    enl_minutes = int(student.get("enl_minutes_required") or 0)
+    if enl_minutes > 0:
+        services.append({
+            "subject": "ENL",
+            "service_type": "ENL",
+            "minutes": enl_minutes,
+            "is_pullout": True
+        })
+
+    mtss_tier = student.get("mtss_tier")
+    if mtss_tier in ["tier_2", "tier_3"]:
+        services.append({
+            "subject": f"FLEX {mtss_tier.upper()}",
+            "service_type": "FLEX",
+            "minutes": 90 if mtss_tier == "tier_3" else 60,
+            "is_pullout": False
+        })
 
     return services
 
@@ -1527,6 +1543,7 @@ def schedule_iep_services_first(
 
         flex_period = period_config.flex_period(student)
         lunch_period = period_config.lunch_period(student)
+        lang_period = period_config.language_block_period(student)
 
         for day in DAYS:
             for period in period_config.periods:
@@ -1599,7 +1616,12 @@ def schedule_iep_services_first(
                     }
 
                 else:
-                    subject = period_config.general_ed_pattern.get( period, "Core Instruction")
+                    if period == lang_period:
+                        subject = "Language Block"
+                    else:
+                        subject = period_config.general_ed_pattern.get(
+                            period, "Core Instruction"
+                        )
                     room = student.get("homeroom") or ""
 
                     teacher = pick_gen_ed_teacher_for_student(

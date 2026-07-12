@@ -4,6 +4,7 @@ import { getStaff } from "../api/staff";
 import { getSchedule } from "../api/schedule";
 import { getComplianceFlags } from "../api/compliance";
 import { generateSchedule, resetSchedule } from "../api/schedule";
+import { useAuth } from "../context/authContext";
 import "../components/Dashboard.css";
 
 export default function Dashboard() {
@@ -11,7 +12,7 @@ export default function Dashboard() {
   const [staff, setStaff] = useState<any[]>([]);
   const [schedule, setSchedule] = useState<any[]>([]);
   const [flags, setFlags] = useState<any[]>([]);
-
+  const { user, logout } = useAuth();
   useEffect(() => {
     load();
   }, []);
@@ -39,7 +40,21 @@ export default function Dashboard() {
       {/* HEADER */}
       <div className="dashboard-header">
         <h1>School Dashboard</h1>
-
+        <div className="user-info">
+        {user ? (
+          <>
+            <span>
+              👤 {user.staff_member
+                ? `${user.staff_member.first_name} ${user.staff_member.last_name}`
+                : user.user_id}{" "}
+              <span className="role-badge">{user.role}</span>
+            </span>
+            <button onClick={logout}>Log out</button>
+          </>
+        ) : (
+          <span>Not logged in</span>
+        )}
+      </div>
         <div className="actions">
           <button>🔄 Refresh</button>
           <button onClick={async () => {
