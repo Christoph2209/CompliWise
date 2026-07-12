@@ -3,7 +3,7 @@ import { getSchedule, updateScheduleEntry } from "../api/schedule";
 import { getStaff } from "../api/staff";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
-const PERIODS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+const PERIODS = [1, 2, 3, 4, 5, 6, 7];
 
 interface StaffMember {
   id: string;
@@ -86,7 +86,7 @@ export default function StudentSchedules() {
   
   return (
     <div style={{ padding: "20px", fontFamily: "Arial" }}>
-      <h1>Student Schedules</h1>
+      <h1 style={{ color: "#313131c7" }}>Student Schedules</h1>
 
       {/* Student selector */}
       <select
@@ -120,11 +120,20 @@ export default function StudentSchedules() {
               {DAYS.map((day) => {
                 const item = getClass(day, period);
                 const isEditing = editingCell?.id === item?.id;
+
+                const cellBackground = !item 
+                ? "#ffffff"
+                : item.is_pullout
+                ? "#e78282"
+                : item.is_flex_period
+                ? "#58ee7d"
+                : "#f9fafb";
                 return (
                   <td
                     key={day}
                     style={{
-                      background: "#f9fafb",
+                      background: cellBackground,
+                      color: "#000000",
                       padding: "8px",
                       minHeight: "80px",
                       border: "1px solid #ddd",

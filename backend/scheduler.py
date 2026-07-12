@@ -9,9 +9,9 @@ Periods are NOT one-size-fits-all across the whole school anymore.
 The real bell schedule has 7 periods/day, and FLEX / Lunch-Recess /
 Language Block are staggered by grade GROUP so that:
 
-    K/1  -> FLEX, then Lunch/Recess
-    2/3  -> FLEX, then Lunch/Recess (one period later)
-    4/5  -> FLEX, then Lunch/Recess (two periods later)
+    K/1  -> FLEX, then Lunch/Recess, then Language Block
+    2/3  -> FLEX, then Lunch/Recess, then Language Block  (one period later)
+    4/5  -> FLEX, then Lunch/Recess, then Language Block  (two periods later)
 
 This stagger is the whole point: it's what keeps FLEX groups (which pull
 from a single grade group) from all landing in the same slot school-wide
@@ -490,6 +490,35 @@ def get_flex_focus_area(student):
     return "general"
 
 
+def get_teacher_grade_group(staff: Dict[str, Any], period_config: PeriodConfig) -> Optional[str]:
+    """
+    Infers a gen-ed teacher's OWN homeroom grade group from their
+    `grade` field, so build_flex_groups can tell whether borrowing them
+    for a different grade group's FLEX slot would pull them off their
+    own class's core instruction.
+    """
+    grade = staff.get("grade")
+    if grade is None or str(grade).strip() == "":
+        return None
+    return period_config.get_group_for_grade(grade)
+
+
+def teacher_has_core_conflict(staff: Dict[str, Any], period: int, period_config: PeriodConfig) -> bool:
+    """
+    True if `period` is protected core-instruction time for this
+    teacher's OWN grade group (i.e. neither their own FLEX period nor
+    their own lunch period). A teacher can only be borrowed for another
+    grade group's FLEX slot at periods where their own class doesn't
+    need them -- their own FLEX period (their kids are elsewhere too)
+    or their own lunch period.
+    """
+    home_group = get_teacher_grade_group(staff, period_config)
+    if home_group is None or home_group not in period_config.group_periods:
+        return False
+    assignment = period_config.group_periods[home_group]
+    return period not in (assignment["flex"], assignment["lunch"])
+
+
 def pick_flex_teacher(focus_area: str, staff_members: list, load_fn=None, exclude: set = None) -> str:
     exclude = exclude or set()
 
@@ -499,7 +528,7 @@ def pick_flex_teacher(focus_area: str, staff_members: list, load_fn=None, exclud
         return load_fn(name)
 
     def best(candidates):
-        candidates = [c for c in candidates if c not in exclude]   # ← never reuse a teacher already at this period
+        candidates = [c for c in candidates if c not in exclude]   # never reuse a teacher already at this period
         if not candidates:
             return ""
         return min(candidates, key=load)
@@ -526,20 +555,45 @@ def pick_flex_teacher(focus_area: str, staff_members: list, load_fn=None, exclud
         staff_full_name(s) for s in staff_members
         if s.get("title") == "ICT Co-Teacher" and staff_full_name(s)
     ]
+    # Paraprofessionals don't carry their own homeroom class, so they
+    # never compete with a grade-level teacher's core instruction for
+    # the same period -- they're the natural default staffing pool for
+    # FLEX groups, and are checked BEFORE gen-ed teachers below.
+    paraprofessionals = [
+        staff_full_name(s) for s in staff_members
+        if s.get("title") == "Paraprofessional" and staff_full_name(s)
+    ]
     all_instructional = list({
         staff_full_name(s) for s in staff_members
-        if s.get("title") not in ("Principal", "Assistant Principal", "Paraprofessional")
+        if s.get("title") not in ("Principal", "Assistant Principal")
         and staff_full_name(s)
     })
 
     if focus_area in ("reading", "writing"):
-        return best(setss_qualified) or best(gen_ed) or best(ict) or best(all_instructional)
+        return (
+            best(setss_qualified)
+            or best(paraprofessionals)
+            or best(gen_ed)
+            or best(ict)
+            or best(all_instructional)
+        )
     if focus_area == "math":
-        return best(gen_ed) or best(setss_qualified) or best(ict) or best(all_instructional)
+        return (
+            best(paraprofessionals)
+            or best(gen_ed)
+            or best(setss_qualified)
+            or best(ict)
+            or best(all_instructional)
+        )
     if focus_area == "behavior":
-        return best(counselors) or best(all_instructional)
+        return best(counselors) or best(paraprofessionals) or best(all_instructional)
 
-    return best(gen_ed) or best(ict) or best(all_instructional)
+    return (
+        best(paraprofessionals)
+        or best(gen_ed)
+        or best(ict)
+        or best(all_instructional)
+    )
 
 
 def build_flex_groups(students, staff_members, period_config: PeriodConfig, schedule_index=None):
@@ -568,7 +622,7 @@ def build_flex_groups(students, staff_members, period_config: PeriodConfig, sche
         # It should never create a FLEX group.
         if student.get("enl_minutes_required", 0) > 0 and not student.get("mtss_tier"):
             continue
-        
+
         grade_group = period_config.get_group_for_student(student)
         mtss_tier = student.get("mtss_tier")
         focus_area = get_flex_focus_area(student)
@@ -593,14 +647,33 @@ def build_flex_groups(students, staff_members, period_config: PeriodConfig, sche
         flex_period = period_config.group_periods[grade_group]["flex"]
         already_used = used_teachers_by_period.setdefault(flex_period, set())
 
+        # Any gen-ed teacher whose OWN grade group has this period as
+        # protected core-instruction time is off-limits for THIS
+        # grade group's FLEX -- borrowing them would mean abandoning
+        # their own class mid-lesson. This is separate from
+        # already_used (which only prevents FLEX-vs-FLEX collisions
+        # within the same period) and is recomputed per bucket since
+        # it depends only on the period, not on prior picks.
+        core_conflicted = {
+            staff_full_name(s) for s in staff_members
+            if staff_full_name(s) and teacher_has_core_conflict(s, flex_period, period_config)
+        }
+
         for i in range(0, len(bucket_students), max_size):
             chunk = bucket_students[i:i + max_size]
             group_number = (i // max_size) + 1
 
-            teacher = pick_flex_teacher(focus_area, staff_members, load_fn=load_fn, exclude=already_used)
+            # Recomputed each iteration (not hoisted) since already_used
+            # keeps growing as chunks within THIS bucket get teachers
+            # assigned -- a frozen union taken before the loop would miss
+            # picks made by earlier chunks of the same bucket.
+            teacher = pick_flex_teacher(
+                focus_area, staff_members, load_fn=load_fn,
+                exclude=already_used | core_conflicted
+            )
             if not teacher:
                 continue
-            
+
             already_used.add(teacher)
             flex_load[teacher] = flex_load.get(teacher, 0) + 1
 
@@ -832,10 +905,27 @@ def get_general_ed_teachers(staff_members: List[Dict[str, Any]]) -> List[Dict[st
 
 
 def pick_gen_ed_teacher_for_student(
-    student, subject, staff_members, day="", period=0, existing_entries=None
+    student,
+    subject,
+    staff_members,
+    day="",
+    period=0,
+    existing_entries=None,
+    schedule_index=None,
 ):
+    """
+    Returns a gen-ed teacher for this student's class at this specific
+    day/period, preferring (in order) the student's homeroom teacher,
+    then any teacher matched to their grade, then any remaining gen-ed
+    teacher -- but SKIPPING anyone already busy at that exact slot when
+    a schedule_index is supplied. Only returns "" when literally no
+    gen-ed teacher is free at that slot, so callers can trust that a
+    non-empty result is actually usable instead of discovering the
+    conflict themselves afterward.
+    """
     homeroom = student.get("homeroom")
     grade = str(student.get("grade", "")).lower()
+    room = homeroom or ""
 
     gen_ed_teachers = [
         staff for staff in staff_members
@@ -845,24 +935,69 @@ def pick_gen_ed_teacher_for_student(
     if not gen_ed_teachers:
         return ""
 
-    for teacher in gen_ed_teachers:
-        teacher_room = teacher.get("room") or teacher.get("homeroom") or ""
-        if homeroom and teacher_room == homeroom:
-            return staff_full_name(teacher)
+    homeroom_matches = []
+    grade_matches = []
+    everyone_else = []
 
     for teacher in gen_ed_teachers:
+        name = staff_full_name(teacher)
+        if not name:
+            continue
+
+        teacher_room = teacher.get("room") or teacher.get("homeroom") or ""
+        if homeroom and teacher_room == homeroom:
+            homeroom_matches.append(name)
+            continue
+
         searchable = " ".join([
             str(teacher.get("grade") or ""),
             str(teacher.get("homeroom") or ""),
             str(teacher.get("room") or ""),
         ]).lower()
         if grade and grade in searchable:
-            return staff_full_name(teacher)
+            grade_matches.append(name)
+            continue
 
-    return staff_full_name(gen_ed_teachers[0])
+        everyone_else.append(name)
+
+    ordered_candidates = homeroom_matches + grade_matches + everyone_else
+
+    if schedule_index is None:
+        # No availability info to check against -- preserve old behavior.
+        return ordered_candidates[0] if ordered_candidates else ""
+
+    for name in ordered_candidates:
+        if schedule_index.is_teacher_busy(
+            teacher=name,
+            day=day,
+            period=period,
+            subject=subject,
+            room=room,
+            allow_same_class_group=True,
+            max_group_size=MAX_GEN_ED_CLASS_SIZE,
+        ):
+            continue
+        return name
+
+    # Genuinely nobody available at this slot -- this is a real gap,
+    # not something a fallback can paper over.
+    return ""
 
 
 def get_student_services(student: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Mandated, individually-scheduled services only.
+
+    NOTE: FLEX for MTSS tier_2/tier_3 students is intentionally NOT
+    generated here. It's handled entirely by build_flex_groups() /
+    apply_flex_groups_to_schedule(), which produces a capped-roster,
+    properly-staffed group placement. A duplicate "FLEX TIER_x" entry
+    used to be appended here too, but pick_teacher_for_service() has no
+    branch that matches service_type "flex", so it always came back
+    teacherless -- producing a second, broken, unstaffed FLEX booking
+    for every MTSS student on top of their real group. Do not re-add
+    a FLEX block here.
+    """
     services = []
 
     if student.get("has_iep"):
@@ -900,6 +1035,19 @@ def get_student_services(student: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "minutes": 30,
                 "is_pullout": True
             })
+
+    # ENL is a mandated, individually-scheduled pullout service and
+    # must remain here regardless of anything done to the FLEX block
+    # above -- this is separate from MTSS FLEX and was accidentally
+    # removed alongside it in a previous edit. Restored.
+    enl_minutes = int(student.get("enl_minutes_required") or 0)
+    if enl_minutes > 0:
+        services.append({
+            "subject": "ENL",
+            "service_type": "ENL",
+            "minutes": enl_minutes,
+            "is_pullout": True
+        })
 
     return services
 
@@ -1510,13 +1658,10 @@ def schedule_iep_services_first(
     #    / general-ed, all resolved per-student via period_config.
     #
     # Every branch here goes through the real teacher-busy check before
-    # booking. Previously the FLEX branch had no busy-check and no
-    # group-size cap at all, which is exactly how a teacher ended up
-    # with a dozen-plus students crammed into one uncapped roster, and
-    # gen-ed periods had NO busy-check whatsoever -- silently
-    # double-booking a teacher who was already committed to a pullout
-    # or FLEX group at that exact slot. Both now raise a flag instead
-    # of silently overbooking when no compliant slot exists.
+    # booking, and pick_gen_ed_teacher_for_student is now given the
+    # schedule_index so it can try OTHER gen-ed teachers before giving
+    # up on a period entirely, instead of hard-failing the moment its
+    # single preferred teacher happens to be busy.
     # ---------------------------------------------------------
     for student in ranked_students:
         student_id = student.get("student_id")
@@ -1542,18 +1687,11 @@ def schedule_iep_services_first(
                         staff_members=staff_members,
                         day=day,
                         period=period,
-                        existing_entries=all_entries
+                        existing_entries=all_entries,
+                        schedule_index=schedule_index,
                     )
 
-                    if teacher and schedule_index.is_teacher_busy(
-                        teacher=teacher,
-                        day=day,
-                        period=period,
-                        subject=subject,
-                        room=room,
-                        allow_same_class_group=True,
-                        max_group_size=MAX_SERVICE_GROUP_SIZE.get("FLEX"),
-                    ):
+                    if not teacher:
                         compliance_flags.append({
                             "student_id": student_id,
                             "flag_type": "unscheduled_flex_period",
@@ -1562,10 +1700,9 @@ def schedule_iep_services_first(
                             "description": (
                                 f"{student_name}'s FLEX group placement on {day} "
                                 f"period {period} was skipped (teacher conflict or "
-                                f"group full), and the fallback homeroom teacher "
-                                f"{teacher} is also unavailable at that slot. "
-                                f"Manually assign this student a FLEX group or "
-                                f"provider for {day}."
+                                f"group full), and no fallback gen-ed teacher was "
+                                f"available at that slot either. Manually assign "
+                                f"this student a FLEX group or provider for {day}."
                             ),
                             "legal_reference": "MTSS / FLEX support requirement",
                             "affected_period": f"{day} period {period}",
@@ -1608,30 +1745,23 @@ def schedule_iep_services_first(
                         staff_members=staff_members,
                         day=day,
                         period=period,
-                        existing_entries=all_entries
+                        existing_entries=all_entries,
+                        schedule_index=schedule_index,
                     )
 
-                    if teacher and schedule_index.is_teacher_busy(
-                        teacher=teacher,
-                        day=day,
-                        period=period,
-                        subject=subject,
-                        room=room,
-                        allow_same_class_group=True,
-                        max_group_size=MAX_GEN_ED_CLASS_SIZE,
-                    ):
+                    if not teacher:
                         compliance_flags.append({
                             "student_id": student_id,
                             "flag_type": "teacher_double_booked",
                             "severity": "critical",
-                            "title": f"{teacher} double-booked during {subject}",
+                            "title": f"No gen-ed teacher available during {subject}",
                             "description": (
-                                f"{teacher} is already committed to a different "
-                                f"class/service on {day}, period {period} (likely "
-                                f"an IEP/ENL/related-service pullout or FLEX group "
-                                f"for another student), so {student_name} could not "
-                                f"be placed in {subject} with this teacher at this "
-                                f"time. Assign a covering teacher, or move the "
+                                f"Every gen-ed teacher eligible for {student_name}'s "
+                                f"{subject} on {day}, period {period} is already "
+                                f"committed to a different class/service at that "
+                                f"exact slot (likely an IEP/ENL/related-service "
+                                f"pullout or FLEX group for another student). "
+                                f"Assign a covering teacher, or move the "
                                 f"conflicting service to another slot."
                             ),
                             "legal_reference": "School scheduling constraint",

@@ -5,6 +5,7 @@ import { getSchedule } from "../api/schedule";
 import { getComplianceFlags } from "../api/compliance";
 import { generateSchedule, resetSchedule } from "../api/schedule";
 import { useAuth } from "../context/authContext";
+import AddStaffModal from "../components/AddStaffModal";
 import "../components/Dashboard.css";
 
 export default function Dashboard() {
@@ -13,6 +14,8 @@ export default function Dashboard() {
   const [schedule, setSchedule] = useState<any[]>([]);
   const [flags, setFlags] = useState<any[]>([]);
   const { user, logout } = useAuth();
+  const [showAddStaff, setShowAddStaff] = useState(false);
+
   useEffect(() => {
     load();
   }, []);
@@ -33,6 +36,7 @@ export default function Dashboard() {
 
   const critical = flags.filter((f) => f.severity === "critical" || f.type === "critical");
   const warnings = flags.filter((f) => f.severity === "warning" || f.type === "warning");
+  const isAdmin = user?.role === "admin";
 
   return (
     <div className="dashboard">
@@ -45,8 +49,9 @@ export default function Dashboard() {
           <>
             <span>
               👤 {user.staff_member
-                ? `${user.staff_member.first_name} ${user.staff_member.last_name}`
-                : user.user_id}{" "}
+                ? `${user.full_name}`
+                : user.full_name || user.user_id}
+                {"\n\n"}
               <span className="role-badge">{user.role}</span>
             </span>
             <button onClick={logout}>Log out</button>
@@ -150,13 +155,23 @@ export default function Dashboard() {
           <h2>⚡ Quick Actions</h2>
 
           <button className="action-btn">➕ Add Student</button>
-          <button className="action-btn">➕ Add Staff</button>
+          {isAdmin && (
+            <button className="action-btn" onClick={() => setShowAddStaff(true)}>
+              ➕ Add Staff
+            </button>
+          )}
           <button className="action-btn">🔄 Generate Schedule</button>
           <button className="action-btn">📊 Run Compliance Check</button>
         </div>
 
       </div>
-
+        {showAddStaff && (
+        <AddStaffModal
+          schoolId={user?.school_id || ""}
+          onClose={() => setShowAddStaff(false)}
+          onCreated={load}
+        />
+      )}
     </div>
   );
 }
