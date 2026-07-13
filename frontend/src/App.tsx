@@ -6,7 +6,7 @@ import Students from "./pages/Students";
 import Staff from "./pages/Staff";
 import StudentSchedules from "./pages/StudentSchedules";
 import CompliancePage from "./pages/Compliance";
-import Dashboard from "./pages/Dashboard";
+import DashboardRouter from "./pages/DashboardRouter";
 import FlexGroups from "./pages/FlexGroups";
 import Login from "./pages/LoginPage";
 import { AuthProvider } from "./context/authContext";
@@ -26,7 +26,7 @@ function App() {
               </ProtectedRoute>
             }
           >
-            <Route path="/" element={<Dashboard />} />
+            <Route path="/" element={<DashboardRouter />} />
             <Route path="/students" element={<Students />} />
             <Route path="/staff" element={<Staff />} />
             <Route path="/student-schedules" element={<StudentSchedules />} />
