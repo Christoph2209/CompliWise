@@ -2,16 +2,52 @@ import { useEffect, useState } from "react";
 import { getSchedule, updateScheduleEntry } from "../api/schedule";
 import { getStaff } from "../api/staff";
 
-const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday"];
+const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 const PERIODS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
+interface StaffMember {
+  id: string;
+  first_name: string;
+  last_name: string;
+  title?: string;
+}
+
+interface ScheduleEntry {
+  id: string;
+  student_id: string;
+  student_name: string;
+  grade: string;
+  day_of_week: string;
+  period: number;
+  subject: string;
+  staff_id?: string;
+  staff_name?: string;
+  service_type?: string;
+  is_pullout: boolean;
+  is_flex_period?: boolean;
+}
+
 export default function StudentSchedules() {
-  const [entries, setEntries] = useState<any[]>([]);
-  const [selectedStudent, setSelectedStudent] = useState("");
-  const [editingCell, setEditingCell] = useState<any>(null);
-  const [staff, setStaff] = useState<any[]>([]);
+  const [entries, setEntries] = useState<ScheduleEntry[]>([]);
+  const [selectedStudent, setSelectedStudent] = useState<string | null>(null);
+  const [editingCell, setEditingCell] = useState<ScheduleEntry | null>(null);
+  const [staff, setStaff] = useState<StaffMember[]>([]);
   useEffect(() => {
-    getSchedule().then(setEntries);
+    async function load() {
+      const [scheduleData, staffData] = await Promise.all([
+        getSchedule(),
+        getStaff(),
+      ]);
+
+      setEntries(scheduleData || []);
+      setStaff(staffData || []);
+
+      if (scheduleData && scheduleData.length > 0) {
+        setSelectedStudent(scheduleData[0].student_id);
+      }
+    }
+
+    load();
   }, []);
 
   const students = Array.from(
@@ -37,7 +73,7 @@ export default function StudentSchedules() {
     );
   }
 
-  async function saveCell(updated: any) {
+  async function saveCell(updated: ScheduleEntry) {
     await updateScheduleEntry(updated.id, updated);
 
     setEntries((prev) =>
@@ -47,28 +83,17 @@ export default function StudentSchedules() {
     setEditingCell(null);
   }
 
-  useEffect(() => {
-  async function load() {
-    const [scheduleData, staffData] = await Promise.all([
-      getSchedule(),
-      getStaff(),
-    ]);
-
-    setEntries(scheduleData || []);
-    setStaff(staffData || []);
-  }
-
-  load();
-}, []);
+  
   return (
     <div style={{ padding: "20px", fontFamily: "Arial" }}>
       <h1>Student Schedules</h1>
 
       {/* Student selector */}
       <select
-        value={selectedStudent}
-        onChange={(e) => setSelectedStudent(e.target.value)}
+        value={selectedStudent || ""}
+        onChange={(e) => setSelectedStudent(e.target.value || null)}
       >
+        <option value="">Loading Students...</option>
         {students.map((s) => (
           <option key={s.id} value={s.id}>
             {s.name}
@@ -95,7 +120,6 @@ export default function StudentSchedules() {
               {DAYS.map((day) => {
                 const item = getClass(day, period);
                 const isEditing = editingCell?.id === item?.id;
-                const isFlex = item?.is_flex_period;
                 return (
                   <td
                     key={day}
@@ -106,11 +130,15 @@ export default function StudentSchedules() {
                       border: "1px solid #ddd",
                       cursor: "pointer",
                     }}
-                    onClick={() => item && setEditingCell(item)}
+                    onClick={() => {
+                      if (item) {
+                        setEditingCell({...item});
+                      }
+                    }}
                   >
                     {!item ? (
                       <span>—</span>
-                    ) : isEditing ? (
+                    ) : isEditing && editingCell ? (
                       <div>
                         <input
                           value={editingCell.subject || ""}
@@ -169,13 +197,26 @@ export default function StudentSchedules() {
                           />
                         </label>
 
-                        <button onClick={() => saveCell(editingCell)}>
-                          Save
-                        </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
 
-                        <button onClick={() => setEditingCell(null)}>
-                          Cancel
-                        </button>
+                          if (editingCell) {
+                            saveCell(editingCell);
+                          }
+                        }}
+                      >
+                        Save
+                      </button>
+
+                      <button
+                        onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingCell(null);
+                      }}
+                    >
+                      Cancel
+                    </button>
                       </div>
                     ) : (
                       <div>

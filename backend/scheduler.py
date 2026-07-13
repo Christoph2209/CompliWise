@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Tuple
 
 
-DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday"]
+DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 CORE_PERIODS = {1, 2, 3, 7, 9}
 PREFERRED_SERVICE_PERIODS = {4}  # FLEX
 BREAK_PERIODS = {5, 6}           # Lunch/Recess

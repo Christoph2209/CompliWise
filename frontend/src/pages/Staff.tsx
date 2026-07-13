@@ -55,7 +55,7 @@ export default function Staff() {
                 SLP
               </span>
 
-              <span className={`badge ${member.is_certified_setss ? "yes" : "no"}`}>
+              <span className={`badge ${member.can_deliver_setss ? "yes" : "no"}`}>
                 SETSS
               </span>
             </div>
