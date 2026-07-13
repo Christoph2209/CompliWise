@@ -3,277 +3,37 @@ scheduler.py
 
 IEP / ENL / MTSS-FLEX scheduling engine for CompliWise.
 
-Key design change from earlier versions:
----------------------------------------
-Periods are NOT one-size-fits-all across the whole school anymore.
-The real bell schedule has 7 periods/day, and FLEX / Lunch-Recess /
-Language Block are staggered by grade GROUP so that:
-
-    K/1  -> FLEX, then Lunch/Recess, then Language Block
-    2/3  -> FLEX, then Lunch/Recess, then Language Block  (one period later)
-    4/5  -> FLEX, then Lunch/Recess, then Language Block  (two periods later)
-
-This stagger is the whole point: it's what keeps FLEX groups (which pull
-from a single grade group) from all landing in the same slot school-wide
-and colliding with every other group's teachers/rosters at once.
-
-All of this is configurable via PeriodConfig, which is built ONCE before
-a scheduling run (e.g. from an admin form or a JSON file) and passed in.
-Nothing about period timing is hardcoded as a module-level constant
-anymore, other than sane defaults so existing callers don't break.
+Shared constants and PeriodConfig live in scheduling_core.py.
+Post-build validation lives in compliance.py. This file is just the
+engine: it ranks students, builds FLEX groups, books Specials, places
+mandated pullout services, and fills in remaining general-ed periods.
 """
 
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-
-DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-
-
-# ---------------------------------------------------------------
-# Default period configuration
-#
-# Real bell schedule (2025-2026 SY):
-#   P1  8:10-8:55
-#   P2  9:00-9:45
-#   P3  9:50-10:35
-#   P4  10:40-11:30
-#   P5  11:35-12:25
-#   P6  12:30-1:20
-#   P7  1:25-2:10
-#
-# Grade groups: K/1, 2/3, 4/5. Each group's FLEX period is the period
-# right before that group's Lunch/Recess period, and Language Block
-# (core ELA instruction) is the period right after Lunch/Recess.
-# ---------------------------------------------------------------
-
-DEFAULT_PERIOD_TIMES = {
-    1: "8:10-8:55",
-    2: "9:00-9:45",
-    3: "9:50-10:35",
-    4: "10:40-11:30",
-    5: "11:35-12:25",
-    6: "12:30-1:20",
-    7: "1:25-2:10",
-}
-
-# Maps the RAW `grade` value as stored on Student.grade (a plain string
-# like "K", "PK", "1", "2" ... "5") to a grade GROUP name. Grade group
-# names are used directly ("K/1", "2/3", "4/5") -- no internal shorthand.
-DEFAULT_GRADE_GROUPS = {
-    "PK": "K/1",
-    "K": "K/1",
-    "1": "K/1",
-    "2": "2/3",
-    "3": "2/3",
-    "4": "4/5",
-    "5": "4/5",
-}
-
-DEFAULT_GROUP_PERIODS = {
-    "K/1": {"flex": 3, "lunch": 4},
-    "2/3": {"flex": 4, "lunch": 5},
-    "4/5": {"flex": 5, "lunch": 6},
-}
-
-# Fallback subject pattern for periods that are neither FLEX, Lunch/
-# Recess, nor Language Block for a given group. This is a placeholder:
-# the real master schedule shows these periods (Math, Science, Specials
-# rotations, etc.) actually vary by classroom and even by day. Treat
-# this as "good enough until we map the full per-group/per-day pattern"
-# rather than a source of truth.
-GENERAL_ED_PATTERN = {
-    1: "Core Instruction",
-    2: "Core Instruction",
-    3: "Math",
-    4: "Math",
-    5: "Math",
-    6: "Science / Social Studies",
-    7: "Specials",
-}
-
-
-class PeriodConfig:
-    """
-    Everything time/period-related the scheduler needs, editable BEFORE
-    a scheduling run instead of hardcoded as module constants. Build one
-    of these from admin input (a form, a JSON file, whatever) and pass
-    it into schedule_iep_services_first(). Omitting it uses the defaults
-    above, so existing callers keep working.
-    """
-
-    def __init__(
-        self,
-        period_times: Optional[Dict[int, str]] = None,
-        grade_groups: Optional[Dict[str, str]] = None,
-        group_periods: Optional[Dict[str, Dict[str, int]]] = None,
-        periods: Optional[List[int]] = None,
-        general_ed_pattern: Optional[Dict[int, str]] = None,
-    ):
-        self.period_times: Dict[int, str] = (
-            dict(period_times) if period_times else dict(DEFAULT_PERIOD_TIMES)
-        )
-        self.grade_groups: Dict[str, str] = (
-            dict(grade_groups) if grade_groups else dict(DEFAULT_GRADE_GROUPS)
-        )
-        self.group_periods: Dict[str, Dict[str, int]] = (
-            {group: dict(assignment) for group, assignment in group_periods.items()}
-            if group_periods
-            else {group: dict(assignment) for group, assignment in DEFAULT_GROUP_PERIODS.items()}
-        )
-        self.periods: List[int] = (
-            list(periods) if periods else sorted(self.period_times.keys())
-        )
-        self.general_ed_pattern: Dict[int, str] = (
-            dict(general_ed_pattern) if general_ed_pattern else dict(GENERAL_ED_PATTERN)
-        )
-        self._validate()
-
-    def _validate(self):
-        """Fail loudly at config time, not silently mid-schedule-run."""
-        if not self.group_periods:
-            raise ValueError("PeriodConfig needs at least one grade group defined")
-
-        for group, assignment in self.group_periods.items():
-            for key in ("flex", "lunch"):
-                if key not in assignment:
-                    raise ValueError(
-                        f"Grade group '{group}' is missing a '{key}' period assignment"
-                    )
-
-            flex_p = assignment["flex"]
-            lunch_p = assignment["lunch"]
-
-            if len({flex_p, lunch_p}) != 2:
-                raise ValueError(
-                    f"Grade group '{group}' has overlapping flex/lunch periods: {assignment}"
-                )
-
-            for p in (flex_p, lunch_p):
-                if p not in self.periods:
-                    raise ValueError(
-                        f"Grade group '{group}' references period {p}, which "
-                        f"isn't in configured periods {self.periods}"
-                    )
-
-        referenced_groups = set(self.grade_groups.values())
-        missing = referenced_groups - set(self.group_periods.keys())
-        if missing:
-            raise ValueError(
-                f"grade_groups references group(s) {missing} that have no "
-                f"entry in group_periods"
-            )
-
-    # -----------------------------------------------------------
-    # Grade -> group lookups
-    # -----------------------------------------------------------
-
-    def get_group_for_grade(self, grade: Any) -> str:
-        key = str(grade).strip().upper() if grade is not None else ""
-        group = self.grade_groups.get(key)
-        if group:
-            return group
-        # Unrecognized/blank grade: fall back to the first configured
-        # group rather than raising, so a bad data row doesn't blow up
-        # an entire scheduling run.
-        return next(iter(self.group_periods))
-
-    def get_group_for_student(self, student: Dict[str, Any]) -> str:
-        return self.get_group_for_grade(student.get("grade"))
-
-    def flex_period(self, student: Dict[str, Any]) -> int:
-        return self.group_periods[self.get_group_for_student(student)]["flex"]
-
-    def lunch_period(self, student: Dict[str, Any]) -> int:
-        return self.group_periods[self.get_group_for_student(student)]["lunch"]
-
-    def core_periods(self, student: Dict[str, Any]) -> Set[int]:
-        """Periods that count as protected core instruction for THIS
-        student's group -- everything except that group's own FLEX and
-        Lunch/Recess slot. (Language Block counts as core/protected
-        too, which is why it's not excluded here.)"""
-        assignment = self.group_periods[self.get_group_for_student(student)]
-        return set(self.periods) - {assignment["flex"], assignment["lunch"]}
-
-    def subject_for_period(self, student: Dict[str, Any], period: int) -> str:
-        """What a student's day looks like at a given period, once
-        FLEX/Lunch/Language Block are accounted for."""
-        if period == self.flex_period(student):
-            return "FLEX"
-        if period == self.lunch_period(student):
-            return "Lunch/Recess"
-        return self.general_ed_pattern.get(period, "Core Instruction")
-
-
-# ---------------------------------------------------------------
-# hard limits on pullouts
-# ---------------------------------------------------------------
-MAX_PULLOUTS_PER_DAY = 3
-MAX_SAME_SERVICE_PER_DAY = 2
-
-MAX_SAME_SERVICE_PER_DAY_OVERRIDES = {
-    "ENL": 3,
-}
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-def max_same_service_per_day(service_type: str) -> int:
-    return MAX_SAME_SERVICE_PER_DAY_OVERRIDES.get(
-        service_type, MAX_SAME_SERVICE_PER_DAY
-    )
-
-
-MIN_DAYS_BETWEEN_SAME_SERVICE = 0
-
-SERVICE_SESSION_LENGTH_MINUTES = {
-    "ENL": 60,
-    "SETSS": 45,
-    "Speech": 30,
-    "OT": 30,
-    "PT": 30,
-    "Counseling": 30,
-    "FLEX": 30,
-}
-DEFAULT_SESSION_LENGTH_MINUTES = 45
-
-
-def session_length_for_service(service_type: str) -> int:
-    return SERVICE_SESSION_LENGTH_MINUTES.get(
-        service_type, DEFAULT_SESSION_LENGTH_MINUTES
-    )
-
-
-MAX_FLEX_GROUP_SIZE = {
-    "tier_2": 15,
-    "tier_3": 8,
-    "enrichment": 10,
-}
-
-FLEX_FOCUS_BY_NEED = {
-    "reading": "reading",
-    "math": "math",
-    "writing": "writing",
-    "behavior": "behavior",
-}
-
-MAX_SERVICE_GROUP_SIZE = {
-    "SETSS": 8,
-    "ICT": 30,
-    "ENL": 25,
-    "Speech": 5,
-    "OT": 5,
-    "PT": 5,
-    "Counseling": 8,
-    "FLEX": 15,
-}
-
-MAX_GEN_ED_CLASS_SIZE = 30
+from scheduling_core import (
+    DAYS,
+    PeriodConfig,
+    full_student_name,
+    staff_full_name,
+    get_student_services,
+    max_same_service_per_day,
+    session_length_for_service,
+    MAX_PULLOUTS_PER_DAY,
+    MAX_SAME_SERVICE_PER_DAY,
+    MAX_SAME_SERVICE_PER_DAY_OVERRIDES,
+    MIN_DAYS_BETWEEN_SAME_SERVICE,
+    MAX_FLEX_GROUP_SIZE,
+    FLEX_FOCUS_BY_NEED,
+    MAX_SERVICE_GROUP_SIZE,
+    MAX_GEN_ED_CLASS_SIZE,
+    KNOWN_SPECIALS_SUBJECTS,
+    SPECIALS_MANDATED_MINUTES_PER_WEEK,
+    SPECIALS_SESSION_LENGTH_MINUTES,
+    DEFAULT_SPECIALS_SESSION_LENGTH_MINUTES,
+    MAX_SPECIALS_CLASS_SIZE,
+)
+from compliance import run_all_compliance_checks
 
 
 class ScheduleIndex:
@@ -285,10 +45,6 @@ class ScheduleIndex:
         self.pullouts_by_student_day = {}
         self.service_count_by_student_day = {}
         self.service_days_by_student = {}
-        # For each (teacher, day, period), the set of (subject, room)
-        # combos already booked there. This is what lets us tell
-        # "joining the same class" apart from "double-booking this
-        # teacher into something else."
         self.teacher_slot_subjects = {}
 
     def student_key(self, student_id, day, period):
@@ -304,8 +60,6 @@ class ScheduleIndex:
         return self.student_key(student_id, day, period) in self.student_busy
 
     def teacher_period_usage(self, teacher, period):
-        """Count how many times this teacher is already scheduled in
-        this period, across ALL days this week."""
         if not teacher:
             return 0
         period = int(period)
@@ -337,11 +91,6 @@ class ScheduleIndex:
         if teacher_key not in self.teacher_busy:
             return False
 
-        # This is the actual double-booking guard. If the teacher
-        # already has a DIFFERENT subject/room booked in this exact
-        # slot, they are busy -- full stop, no group-size math applies.
-        # Only requests to join the SAME subject/room fall through to
-        # the group-size check below.
         existing = self.teacher_subjects_at_slot(teacher, day, period)
         if existing and (subject, room) not in existing:
             return True
@@ -438,7 +187,6 @@ class ScheduleIndex:
             self.pullouts_by_student_day[key] = self.pullouts_by_student_day.get(key, 0) + 1
 
     def remove_student_entry_at_slot(self, entries, student_id, day, period):
-        removed = []
         kept = []
         for entry in entries:
             same_slot = (
@@ -446,9 +194,7 @@ class ScheduleIndex:
                 and entry.get("day_of_week") == day
                 and int(entry.get("period")) == int(period)
             )
-            if same_slot:
-                removed.append(entry)
-            else:
+            if not same_slot:
                 kept.append(entry)
 
         entries[:] = kept
@@ -466,7 +212,6 @@ def get_flex_focus_area(student):
     For enrichment students (no MTSS tier), still derive a focus area
     from grade or homeroom so groups are descriptive and spreadable.
     """
-
     services = student.get("iep_services") or []
     services_text = str(services).lower()
 
@@ -491,12 +236,6 @@ def get_flex_focus_area(student):
 
 
 def get_teacher_grade_group(staff: Dict[str, Any], period_config: PeriodConfig) -> Optional[str]:
-    """
-    Infers a gen-ed teacher's OWN homeroom grade group from their
-    `grade` field, so build_flex_groups can tell whether borrowing them
-    for a different grade group's FLEX slot would pull them off their
-    own class's core instruction.
-    """
     grade = staff.get("grade")
     if grade is None or str(grade).strip() == "":
         return None
@@ -504,14 +243,6 @@ def get_teacher_grade_group(staff: Dict[str, Any], period_config: PeriodConfig) 
 
 
 def teacher_has_core_conflict(staff: Dict[str, Any], period: int, period_config: PeriodConfig) -> bool:
-    """
-    True if `period` is protected core-instruction time for this
-    teacher's OWN grade group (i.e. neither their own FLEX period nor
-    their own lunch period). A teacher can only be borrowed for another
-    grade group's FLEX slot at periods where their own class doesn't
-    need them -- their own FLEX period (their kids are elsewhere too)
-    or their own lunch period.
-    """
     home_group = get_teacher_grade_group(staff, period_config)
     if home_group is None or home_group not in period_config.group_periods:
         return False
@@ -528,15 +259,11 @@ def pick_flex_teacher(focus_area: str, staff_members: list, load_fn=None, exclud
         return load_fn(name)
 
     def best(candidates):
-        candidates = [c for c in candidates if c not in exclude]   # never reuse a teacher already at this period
+        candidates = [c for c in candidates if c not in exclude]
         if not candidates:
             return ""
         return min(candidates, key=load)
 
-    enl_certified = [
-        staff_full_name(s) for s in staff_members
-        if s.get("is_certified_enl") and staff_full_name(s)
-    ]
     setss_qualified = [
         staff_full_name(s) for s in staff_members
         if (s.get("can_deliver_setss") or s.get("is_certified_sped"))
@@ -555,10 +282,6 @@ def pick_flex_teacher(focus_area: str, staff_members: list, load_fn=None, exclud
         staff_full_name(s) for s in staff_members
         if s.get("title") == "ICT Co-Teacher" and staff_full_name(s)
     ]
-    # Paraprofessionals don't carry their own homeroom class, so they
-    # never compete with a grade-level teacher's core instruction for
-    # the same period -- they're the natural default staffing pool for
-    # FLEX groups, and are checked BEFORE gen-ed teachers below.
     paraprofessionals = [
         staff_full_name(s) for s in staff_members
         if s.get("title") == "Paraprofessional" and staff_full_name(s)
@@ -596,19 +319,283 @@ def pick_flex_teacher(focus_area: str, staff_members: list, load_fn=None, exclud
     )
 
 
+def get_homerooms(students: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    homerooms: Dict[str, List[Dict[str, Any]]] = {}
+    for student in students:
+        homeroom = str(student.get("homeroom") or "").strip()
+        if not homeroom:
+            continue
+        homerooms.setdefault(homeroom, []).append(student)
+    return homerooms
+
+
+def get_specials_teachers(
+    staff_members: List[Dict[str, Any]],
+    period_config: PeriodConfig,
+) -> Dict[str, List[str]]:
+    by_subject: Dict[str, List[str]] = {}
+    for staff in staff_members:
+        subject = staff.get("specials_subject") or period_config.specials_titles.get(
+            staff.get("title", "")
+        )
+        if not subject:
+            continue
+        name = staff_full_name(staff)
+        if not name:
+            continue
+        by_subject.setdefault(subject, []).append(name)
+    return by_subject
+
+
+def find_mergeable_specials_class(
+    schedule_index: ScheduleIndex,
+    subject: str,
+    max_group_size: int,
+    exclude_room: str = "",
+) -> Optional[Tuple[str, str, int, str]]:
+    best = None
+
+    for (teacher, day, period, subj, room), roster in schedule_index.class_rosters.items():
+        if subj != subject or not room or room == exclude_room:
+            continue
+
+        current_size = len(roster)
+        if current_size >= max_group_size:
+            continue
+
+        if best is None or current_size < best[4]:
+            best = (teacher, day, period, room, current_size)
+
+    if best is None:
+        return None
+
+    teacher, day, period, room, _ = best
+    return teacher, day, period, room
+
+
+def build_specials_schedule(
+    students: List[Dict[str, Any]],
+    staff_members: List[Dict[str, Any]],
+    period_config: PeriodConfig,
+    schedule_index: ScheduleIndex,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    entries: List[Dict[str, Any]] = []
+    flags: List[Dict[str, Any]] = []
+
+    homerooms = get_homerooms(students)
+    teachers_by_subject = get_specials_teachers(staff_members, period_config)
+
+    subjects = sorted(
+        set(period_config.specials_sessions_per_week.keys())
+        | set(SPECIALS_MANDATED_MINUTES_PER_WEEK.keys())
+    )
+
+    if not subjects:
+        return entries, flags
+
+    teacher_load: Dict[str, int] = {}
+
+    def pick_teacher(subject: str, day: str, period: int, room: str) -> str:
+        candidates = sorted(
+            set(teachers_by_subject.get(subject, [])),
+            key=lambda name: teacher_load.get(name, 0),
+        )
+        for name in candidates:
+            if not schedule_index.is_teacher_busy(
+                teacher=name,
+                day=day,
+                period=period,
+                subject=subject,
+                room=room,
+                allow_same_class_group=True,
+                max_group_size=MAX_SPECIALS_CLASS_SIZE,
+            ):
+                return name
+        return ""
+
+    def session_length(subject: str) -> int:
+        return SPECIALS_SESSION_LENGTH_MINUTES.get(subject, DEFAULT_SPECIALS_SESSION_LENGTH_MINUTES)
+
+    def sessions_needed_for(subject: str) -> int:
+        mandated_minutes = SPECIALS_MANDATED_MINUTES_PER_WEEK.get(subject)
+        if mandated_minutes:
+            return max(1, round(mandated_minutes / session_length(subject)))
+        return period_config.specials_sessions_per_week.get(subject, 0)
+
+    for homeroom, roster in homerooms.items():
+        sample = roster[0]
+        grade_group = period_config.get_group_for_student(sample)
+        lunch_period = period_config.group_periods[grade_group]["lunch"]
+
+        sessions_needed = {subject: sessions_needed_for(subject) for subject in subjects}
+
+        target_queue: List[str] = []
+        max_count = max(sessions_needed.values()) if sessions_needed else 0
+        for i in range(max_count):
+            for subject in subjects:
+                if i < sessions_needed.get(subject, 0):
+                    target_queue.append(subject)
+
+        days_used: Set[str] = set()
+        minutes_achieved: Dict[str, int] = {subject: 0 for subject in subjects}
+
+        for target_subject in target_queue:
+            booked = False
+            candidate_days = [d for d in DAYS if d not in days_used] + [d for d in DAYS if d in days_used]
+
+            for subject_attempt in [target_subject] + [s for s in subjects if s != target_subject]:
+                if booked:
+                    break
+
+                for day in candidate_days:
+                    if booked:
+                        break
+
+                    for period in period_config.periods:
+                        if period == lunch_period:
+                            continue
+
+                        free_students = [
+                            s for s in roster
+                            if not schedule_index.is_student_busy(s.get("student_id"), day, period)
+                        ]
+                        if not free_students:
+                            continue
+
+                        teacher = pick_teacher(subject_attempt, day, period, homeroom)
+                        if not teacher:
+                            continue
+
+                        for student in free_students:
+                            entry = {
+                                "student_id": student.get("student_id"),
+                                "day_of_week": day,
+                                "period": period,
+                                "subject": subject_attempt,
+                                "teacher": teacher,
+                                "room": homeroom,
+                                "is_pullout": False,
+                                "service_type": "general_ed",
+                                "is_flex_period": False,
+                            }
+                            entries.append(entry)
+                            schedule_index.add_entry(entry)
+
+                        teacher_load[teacher] = teacher_load.get(teacher, 0) + 1
+                        minutes_achieved[subject_attempt] = (
+                            minutes_achieved.get(subject_attempt, 0) + session_length(subject_attempt)
+                        )
+                        days_used.add(day)
+                        booked = True
+                        break
+
+            if not booked and period_config.allow_specials_merge:
+                merged = find_mergeable_specials_class(
+                    schedule_index, target_subject, MAX_SPECIALS_CLASS_SIZE, exclude_room=homeroom
+                )
+                if merged:
+                    m_teacher, m_day, m_period, m_room = merged
+                    free_students = [
+                        s for s in roster
+                        if not schedule_index.is_student_busy(s.get("student_id"), m_day, m_period)
+                    ]
+                    if free_students:
+                        for student in free_students:
+                            entry = {
+                                "student_id": student.get("student_id"),
+                                "day_of_week": m_day,
+                                "period": m_period,
+                                "subject": target_subject,
+                                "teacher": m_teacher,
+                                "room": m_room,
+                                "is_pullout": False,
+                                "service_type": "general_ed",
+                                "is_flex_period": False,
+                            }
+                            entries.append(entry)
+                            schedule_index.add_entry(entry)
+
+                        minutes_achieved[target_subject] = (
+                            minutes_achieved.get(target_subject, 0) + session_length(target_subject)
+                        )
+                        booked = True
+
+                        flags.append({
+                            "student_id": "multiple",
+                            "flag_type": "specials_classes_combined",
+                            "severity": "info",
+                            "title": f"{homeroom} combined for {target_subject}",
+                            "description": (
+                                f"Homeroom {homeroom} had no dedicated {target_subject} "
+                                f"(or substitute) specialist free this week, so it was "
+                                f"combined with another homeroom's {target_subject} "
+                                f"class ({m_teacher}, room {m_room}) instead of going "
+                                f"unscheduled."
+                            ),
+                            "legal_reference": "School scheduling constraint",
+                            "affected_period": f"{m_day} period {m_period}",
+                            "status": "open",
+                        })
+
+            if not booked:
+                flags.append({
+                    "student_id": "multiple",
+                    "flag_type": "unscheduled_specials_period",
+                    "severity": "warning",
+                    "title": f"{homeroom} missing a {target_subject} session",
+                    "description": (
+                        f"Homeroom {homeroom} could not be scheduled for a "
+                        f"{target_subject} session this week -- no specialist, "
+                        f"in {target_subject} or a substitute subject, was free "
+                        f"at any open slot, and no other homeroom's class had "
+                        f"room to combine into. Add staffing or open up a slot "
+                        f"for this homeroom."
+                    ),
+                    "legal_reference": "School scheduling constraint",
+                    "affected_period": "weekly schedule",
+                    "status": "open",
+                })
+
+        pe_mandate = SPECIALS_MANDATED_MINUTES_PER_WEEK.get("PE")
+        if pe_mandate and minutes_achieved.get("PE", 0) < pe_mandate:
+            flags.append({
+                "student_id": "multiple",
+                "flag_type": "specials_mandate_unmet",
+                "severity": "critical",
+                "title": f"{homeroom} under the weekly PE minutes mandate",
+                "description": (
+                    f"Homeroom {homeroom} received {minutes_achieved.get('PE', 0)} "
+                    f"minutes of PE this week; {pe_mandate} minutes are legally "
+                    f"mandated. Music substitution and merging with other "
+                    f"homerooms were both tried, but coverage still fell short -- "
+                    f"add PE staffing or another open slot for this homeroom."
+                ),
+                "legal_reference": "Mandated Physical Education minutes requirement",
+                "affected_period": "weekly schedule",
+                "status": "open",
+            })
+
+    return entries, flags
+
+
 def build_flex_groups(students, staff_members, period_config: PeriodConfig, schedule_index=None):
     """
-    Buckets students into FLEX groups keyed by (grade GROUP, tier,
-    focus_area) -- grade group is part of the key so a "reading tier_2"
-    bucket never mixes, say, K/1 kids with 4/5 kids into one group at
-    one period. Each group's period comes from period_config, staggered
-    by grade group so FLEX groups across the school don't all collide
-    in the same slot.
+    Each non-paraprofessional teacher is limited to ONE FLEX assignment
+    total, across ALL grade groups/periods. Paraprofessionals are
+    exempt from this cap since they don't carry their own homeroom
+    class. The per-PERIOD check (already_used) still applies to
+    everyone.
     """
     groups = []
     buckets = {}
     flex_load = {}
     used_teachers_by_period = {}
+    used_teachers_overall = set()
+
+    paraprofessional_names = {
+        staff_full_name(s) for s in staff_members
+        if s.get("title") == "Paraprofessional" and staff_full_name(s)
+    }
 
     def load_fn(name):
         return flex_load.get(name, 0)
@@ -618,8 +605,6 @@ def build_flex_groups(students, staff_members, period_config: PeriodConfig, sche
         if not student_id:
             continue
 
-        # ENL is scheduled independently through ENL services.
-        # It should never create a FLEX group.
         if student.get("enl_minutes_required", 0) > 0 and not student.get("mtss_tier"):
             continue
 
@@ -647,34 +632,26 @@ def build_flex_groups(students, staff_members, period_config: PeriodConfig, sche
         flex_period = period_config.group_periods[grade_group]["flex"]
         already_used = used_teachers_by_period.setdefault(flex_period, set())
 
-        # Any gen-ed teacher whose OWN grade group has this period as
-        # protected core-instruction time is off-limits for THIS
-        # grade group's FLEX -- borrowing them would mean abandoning
-        # their own class mid-lesson. This is separate from
-        # already_used (which only prevents FLEX-vs-FLEX collisions
-        # within the same period) and is recomputed per bucket since
-        # it depends only on the period, not on prior picks.
         core_conflicted = {
             staff_full_name(s) for s in staff_members
             if staff_full_name(s) and teacher_has_core_conflict(s, flex_period, period_config)
         }
 
+        overall_exclusions = used_teachers_overall - paraprofessional_names
+
         for i in range(0, len(bucket_students), max_size):
             chunk = bucket_students[i:i + max_size]
             group_number = (i // max_size) + 1
 
-            # Recomputed each iteration (not hoisted) since already_used
-            # keeps growing as chunks within THIS bucket get teachers
-            # assigned -- a frozen union taken before the loop would miss
-            # picks made by earlier chunks of the same bucket.
             teacher = pick_flex_teacher(
                 focus_area, staff_members, load_fn=load_fn,
-                exclude=already_used | core_conflicted
+                exclude=already_used | core_conflicted | overall_exclusions
             )
             if not teacher:
                 continue
 
             already_used.add(teacher)
+            used_teachers_overall.add(teacher)
             flex_load[teacher] = flex_load.get(teacher, 0) + 1
 
             for day in DAYS:
@@ -695,52 +672,6 @@ def build_flex_groups(students, staff_members, period_config: PeriodConfig, sche
     return groups
 
 
-def validate_class_sizes(entries):
-    flags = []
-    class_rosters = {}
-
-    for entry in entries:
-        if entry.get("is_pullout"):
-            continue
-        if entry.get("service_type") != "general_ed":
-            continue
-        if entry.get("subject") in ("FLEX", "Lunch/Recess"):
-            continue
-        key = (
-            entry.get("teacher", ""),
-            entry.get("day_of_week"),
-            int(entry.get("period")),
-            entry.get("subject", ""),
-            entry.get("room", "")
-        )
-
-        if key not in class_rosters:
-            class_rosters[key] = set()
-
-        class_rosters[key].add(entry["student_id"])
-
-    for key, student_ids in class_rosters.items():
-        teacher, day, period, subject, room = key
-        class_size = len(student_ids)
-
-        if class_size > MAX_GEN_ED_CLASS_SIZE:
-            flags.append({
-                "student_id": "multiple",
-                "flag_type": "group_size_violation",
-                "severity": "warning",
-                "title": f"{subject} class exceeds max size",
-                "description": (
-                    f"{teacher}'s {subject} class on {day}, period {period} "
-                    f"has {class_size} students. Max allowed is {MAX_GEN_ED_CLASS_SIZE}."
-                ),
-                "legal_reference": "School scheduling constraint",
-                "affected_period": f"{day} period {period}",
-                "status": "open"
-            })
-
-    return flags
-
-
 def class_group_size(
     entries: List[Dict[str, Any]],
     teacher: str,
@@ -750,7 +681,6 @@ def class_group_size(
     room: str
 ) -> int:
     count = 0
-
     for entry in entries:
         if entry.get("teacher") != teacher:
             continue
@@ -763,7 +693,6 @@ def class_group_size(
         if entry.get("room", "") != room:
             continue
         count += 1
-
     return count
 
 
@@ -794,17 +723,10 @@ def score_slot_for_service(
 
 def dedupe_flex_groups(flex_groups):
     """
-    Collapse truly duplicate FLEX group records (same grade_group + tier
-    + focus_area + teacher + day + period + group_number) into one group
-    per slot.
-
-    IMPORTANT: group_number (and grade_group) are part of the merge key.
-    Group 1 and Group 2 of the same bucket represent DIFFERENT sets of
-    students that didn't fit in one roster together -- they must stay
-    separate records, or you get exactly the "20 students, max 10" bug
-    (two 10-student chunks silently recombined into one 20-student
-    group). Only records that are true re-emissions of the SAME chunk
-    (e.g. from a duplicate build_flex_groups call) should merge.
+    Collapse truly duplicate FLEX group records. group_number (and
+    grade_group) are part of the merge key -- Group 1 and Group 2 of
+    the same bucket are DIFFERENT sets of students and must stay
+    separate records.
     """
     import re
 
@@ -819,7 +741,7 @@ def dedupe_flex_groups(flex_groups):
             group.get("teacher"),
             group.get("day_of_week"),
             int(group.get("period")),
-            group.get("group_number"),  # keeps distinct chunks separate
+            group.get("group_number"),
         )
 
         if base_key not in merged:
@@ -865,12 +787,6 @@ def dedupe_flex_groups(flex_groups):
     return result
 
 
-def full_student_name(student: Dict[str, Any]) -> str:
-    first = student.get("first_name", "")
-    last = student.get("last_name", "")
-    return f"{first} {last}".strip() or student.get("student_id", "Unknown Student")
-
-
 def priority_score(student: Dict[str, Any]) -> int:
     score = 0
 
@@ -892,10 +808,6 @@ def priority_score(student: Dict[str, Any]) -> int:
     return score
 
 
-def staff_full_name(staff: Dict[str, Any]) -> str:
-    return f"{staff.get('first_name', '')} {staff.get('last_name', '')}".strip()
-
-
 def is_general_ed_teacher(staff: Dict[str, Any]) -> bool:
     return staff.get("title") == "General Education Teacher"
 
@@ -913,16 +825,6 @@ def pick_gen_ed_teacher_for_student(
     existing_entries=None,
     schedule_index=None,
 ):
-    """
-    Returns a gen-ed teacher for this student's class at this specific
-    day/period, preferring (in order) the student's homeroom teacher,
-    then any teacher matched to their grade, then any remaining gen-ed
-    teacher -- but SKIPPING anyone already busy at that exact slot when
-    a schedule_index is supplied. Only returns "" when literally no
-    gen-ed teacher is free at that slot, so callers can trust that a
-    non-empty result is actually usable instead of discovering the
-    conflict themselves afterward.
-    """
     homeroom = student.get("homeroom")
     grade = str(student.get("grade", "")).lower()
     room = homeroom or ""
@@ -963,7 +865,6 @@ def pick_gen_ed_teacher_for_student(
     ordered_candidates = homeroom_matches + grade_matches + everyone_else
 
     if schedule_index is None:
-        # No availability info to check against -- preserve old behavior.
         return ordered_candidates[0] if ordered_candidates else ""
 
     for name in ordered_candidates:
@@ -979,77 +880,7 @@ def pick_gen_ed_teacher_for_student(
             continue
         return name
 
-    # Genuinely nobody available at this slot -- this is a real gap,
-    # not something a fallback can paper over.
     return ""
-
-
-def get_student_services(student: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """
-    Mandated, individually-scheduled services only.
-
-    NOTE: FLEX for MTSS tier_2/tier_3 students is intentionally NOT
-    generated here. It's handled entirely by build_flex_groups() /
-    apply_flex_groups_to_schedule(), which produces a capped-roster,
-    properly-staffed group placement. A duplicate "FLEX TIER_x" entry
-    used to be appended here too, but pick_teacher_for_service() has no
-    branch that matches service_type "flex", so it always came back
-    teacherless -- producing a second, broken, unstaffed FLEX booking
-    for every MTSS student on top of their real group. Do not re-add
-    a FLEX block here.
-    """
-    services = []
-
-    if student.get("has_iep"):
-        raw_services = student.get("iep_services") or []
-
-        if raw_services:
-            for service in raw_services:
-                if isinstance(service, dict):
-                    service_type = (
-                        service.get("service_type")
-                        or service.get("type")
-                        or service.get("name")
-                        or "SETSS"
-                    )
-                    minutes = int(
-                        service.get("minutes_per_week")
-                        or service.get("minutes")
-                        or service.get("required_minutes")
-                        or 30
-                    )
-                else:
-                    service_type = str(service)
-                    minutes = 30
-
-                services.append({
-                    "subject": service_type,
-                    "service_type": service_type,
-                    "minutes": minutes,
-                    "is_pullout": False
-                })
-        else:
-            services.append({
-                "subject": "IEP Support",
-                "service_type": "SETSS",
-                "minutes": 30,
-                "is_pullout": True
-            })
-
-    # ENL is a mandated, individually-scheduled pullout service and
-    # must remain here regardless of anything done to the FLEX block
-    # above -- this is separate from MTSS FLEX and was accidentally
-    # removed alongside it in a previous edit. Restored.
-    enl_minutes = int(student.get("enl_minutes_required") or 0)
-    if enl_minutes > 0:
-        services.append({
-            "subject": "ENL",
-            "service_type": "ENL",
-            "minutes": enl_minutes,
-            "is_pullout": True
-        })
-
-    return services
 
 
 def find_open_slot_fast(
@@ -1061,16 +892,6 @@ def find_open_slot_fast(
     service_type="",
     is_pullout=False
 ):
-    """
-    Takes `student` (not just student_id) now, since period scoring is
-    grade-group-dependent. `subject` stays a separate parameter from
-    service_type -- rosters are keyed by the entry's actual `subject`
-    field, which differs from service_type for fallback SETSS
-    ("IEP Support" vs "SETSS") and FLEX-via-MTSS ("FLEX TIER_2" vs
-    "FLEX"). Passing service_type into the roster check instead of the
-    real subject makes group-size caps silently no-op and lets a
-    teacher get booked into two different subjects in the same slot.
-    """
     student_id = student.get("student_id")
     core_periods = period_config.core_periods(student)
     candidate_slots = []
@@ -1171,112 +992,7 @@ def pick_teacher_for_service(
     return min(candidates, key=load)
 
 
-def validate_staff_schedule(staff_schedule):
-    flags = []
-
-    for teacher, days in staff_schedule.items():
-        for day, periods in days.items():
-            for period, blocks in periods.items():
-                for block in blocks:
-                    students = block["students"]
-                    count = len(students)
-
-                    if block["service_type"] == "general_ed":
-                        max_size = MAX_GEN_ED_CLASS_SIZE
-                    else:
-                        max_size = MAX_SERVICE_GROUP_SIZE.get(block["service_type"], 8)
-
-                    if count > max_size:
-                        flags.append({
-                            "student_id": "multiple",
-                            "flag_type": "group_size_violation",
-                            "severity": "warning",
-                            "title": f"{teacher} has too many students",
-                            "description": (
-                                f"{teacher} has {count} students for "
-                                f"{block['subject']} on {day}, period {period}. "
-                                f"Max allowed is {max_size}."
-                            ),
-                            "legal_reference": "School scheduling constraint",
-                            "affected_period": f"{day} period {period}",
-                            "status": "open"
-                        })
-
-    return flags
-
-
-def validate_pullout_limits(entries, students_by_id):
-    flags = []
-
-    pullouts_by_student_day = {}
-    service_by_student_day = {}
-
-    for entry in entries:
-        if not entry.get("is_pullout"):
-            continue
-
-        student_id = entry["student_id"]
-        day = entry["day_of_week"]
-        service_type = entry.get("service_type", "")
-
-        key = (student_id, day)
-        pullouts_by_student_day[key] = pullouts_by_student_day.get(key, 0) + 1
-
-        svc_key = (student_id, day, service_type)
-        service_by_student_day[svc_key] = service_by_student_day.get(svc_key, 0) + 1
-
-    for (student_id, day), count in pullouts_by_student_day.items():
-        if count > MAX_PULLOUTS_PER_DAY:
-            student = students_by_id.get(student_id, {})
-            student_name = full_student_name(student)
-
-            flags.append({
-                "student_id": student_id,
-                "flag_type": "excessive_pullouts",
-                "severity": "warning",
-                "title": f"{student_name} has too many pullouts on {day}",
-                "description": (
-                    f"{student_name} has {count} pullout services on {day}. "
-                    f"Max recommended is {MAX_PULLOUTS_PER_DAY} per day."
-                ),
-                "legal_reference": "Least Restrictive Environment (LRE) consideration",
-                "affected_period": f"{day} (all periods)",
-                "status": "open"
-            })
-
-    for (student_id, day, service_type), count in service_by_student_day.items():
-        limit = max_same_service_per_day(service_type)
-        if count > limit:
-            student = students_by_id.get(student_id, {})
-            student_name = full_student_name(student)
-
-            flags.append({
-                "student_id": student_id,
-                "flag_type": "duplicate_service_same_day",
-                "severity": "warning",
-                "title": f"{student_name} has duplicate {service_type} on {day}",
-                "description": (
-                    f"{student_name} is scheduled for {service_type} {count} times "
-                    f"on {day}. Max allowed is {limit} per day."
-                ),
-                "legal_reference": "School scheduling constraint",
-                "affected_period": f"{day} (all periods)",
-                "status": "open"
-            })
-
-    return flags
-
-
 def apply_flex_groups_to_schedule(all_entries, flex_groups, students_by_id, schedule_index):
-    """
-    Guards against a teacher being double-booked into two DIFFERENT
-    FLEX groups at the same day/period (e.g. pick_flex_teacher assigning
-    the same teacher to both a "reading" bucket and a "math" bucket
-    that land in the same slot for the same grade group). Joining the
-    SAME group is still fine and expected -- only a genuine conflicting
-    subject gets skipped, with a compliance flag raised so it's visible
-    rather than silently dropped.
-    """
     conflict_flags = []
 
     for group in flex_groups:
@@ -1332,17 +1048,6 @@ def apply_flex_groups_to_schedule(all_entries, flex_groups, students_by_id, sche
     return conflict_flags
 
 
-def remove_student_entry_at_slot(entries, student_id, day, period):
-    entries[:] = [
-        entry for entry in entries
-        if not (
-            entry.get("student_id") == student_id
-            and entry.get("day_of_week") == day
-            and int(entry.get("period")) == int(period)
-        )
-    ]
-
-
 def add_to_staff_schedule(
     staff_schedule,
     teacher,
@@ -1389,40 +1094,13 @@ def add_to_staff_schedule(
     })
 
 
-def core_subject_for_period(period: int, student: Dict[str, Any], period_config: PeriodConfig) -> str:
-    return period_config.subject_for_period(student, period)
-
-
-def pullouts_already_on_day(
-    entries: List[Dict[str, Any]],
-    student_id: str,
-    day: str
-) -> int:
-    count = 0
-    for entry in entries:
-        if (
-            entry["student_id"] == student_id
-            and entry["day_of_week"] == day
-            and entry.get("is_pullout")
-        ):
-            count += 1
-    return count
-
-
-def service_already_on_day(
-    entries: List[Dict[str, Any]],
-    student_id: str,
-    service_type: str,
-    day: str
-) -> bool:
-    for entry in entries:
-        if (
-            entry["student_id"] == student_id
-            and entry["day_of_week"] == day
-            and entry.get("service_type") == service_type
-        ):
-            return True
-    return False
+def core_subject_for_period(
+    period: int,
+    student: Dict[str, Any],
+    period_config: PeriodConfig,
+    day: Optional[str] = None,
+) -> str:
+    return period_config.subject_for_period(student, period, day)
 
 
 def schedule_iep_services_first(
@@ -1432,19 +1110,8 @@ def schedule_iep_services_first(
     period_config: Optional[PeriodConfig] = None,
 ) -> Dict[str, Any]:
     """
-    Main scheduler.
-
-    Hard limits enforced:
-    - MAX_PULLOUTS_PER_DAY
-    - MAX_SAME_SERVICE_PER_DAY (with per-service overrides)
-    - MIN_DAYS_BETWEEN_SAME_SERVICE
-    - Teachers can never be double-booked into two different
-      subjects/groups in the same day/period slot.
-    - Service and FLEX group rosters are capped at
-      MAX_SERVICE_GROUP_SIZE / MAX_FLEX_GROUP_SIZE.
-    - FLEX / Lunch-Recess / Language Block periods are staggered by
-      grade group (K/1, 2/3, 4/5) via period_config, so FLEX groups
-      across the whole school don't collide in one slot.
+    Main scheduler. See scheduling_core.py for PeriodConfig/constants
+    and compliance.py for post-build validation.
     """
 
     staff_members = staff_members or []
@@ -1471,15 +1138,6 @@ def schedule_iep_services_first(
 
     # ---------------------------------------------------------
     # 2. Build and place FLEX groups FIRST.
-    #
-    # FLEX groups are rigid -- same teacher, same slot, every day, all
-    # week -- and now that slot is grade-group-specific via
-    # period_config. Pullout sessions are flexible -- find_open_slot_fast
-    # can place them in whatever periods are left for that student's
-    # grade group. By locking in FLEX commitments first, a teacher
-    # who's already leading a FLEX group becomes correctly "busy" by
-    # the time pullout scheduling runs, so find_open_slot_fast naturally
-    # routes those pullouts elsewhere instead of colliding with FLEX.
     # ---------------------------------------------------------
     flex_groups = build_flex_groups(
         students=ranked_students,
@@ -1654,14 +1312,34 @@ def schedule_iep_services_first(
                 })
 
     # ---------------------------------------------------------
+    # 3.5. Schedule Specials (PE, Music) per classroom.
+    # ---------------------------------------------------------
+    specials_entries, specials_flags = build_specials_schedule(
+        students=ranked_students,
+        staff_members=staff_members,
+        period_config=period_config,
+        schedule_index=schedule_index,
+    )
+    all_entries.extend(specials_entries)
+    compliance_flags.extend(specials_flags)
+
+    for entry in specials_entries:
+        student = students_by_id.get(entry["student_id"], {})
+        add_to_staff_schedule(
+            staff_schedule=staff_schedule,
+            teacher=entry["teacher"],
+            day=entry["day_of_week"],
+            period=entry["period"],
+            student_id=entry["student_id"],
+            student_name=full_student_name(student),
+            subject=entry["subject"],
+            service_type=entry["service_type"],
+            is_pullout=False
+        )
+
+    # ---------------------------------------------------------
     # 4. Fill remaining periods: FLEX / Lunch-Recess / Language Block
     #    / general-ed, all resolved per-student via period_config.
-    #
-    # Every branch here goes through the real teacher-busy check before
-    # booking, and pick_gen_ed_teacher_for_student is now given the
-    # schedule_index so it can try OTHER gen-ed teachers before giving
-    # up on a period entirely, instead of hard-failing the moment its
-    # single preferred teacher happens to be busy.
     # ---------------------------------------------------------
     for student in ranked_students:
         student_id = student.get("student_id")
@@ -1736,7 +1414,7 @@ def schedule_iep_services_first(
                     }
 
                 else:
-                    subject = period_config.general_ed_pattern.get( period, "Core Instruction")
+                    subject = period_config.general_ed_pattern.get(period, "Core Instruction")
                     room = student.get("homeroom") or ""
 
                     teacher = pick_gen_ed_teacher_for_student(
@@ -1800,9 +1478,14 @@ def schedule_iep_services_first(
     # ---------------------------------------------------------
     # 5. Validate
     # ---------------------------------------------------------
-    compliance_flags.extend(validate_staff_schedule(staff_schedule))
-    compliance_flags.extend(validate_class_sizes(all_entries))
-    compliance_flags.extend(validate_pullout_limits(all_entries, students_by_id))
+    compliance_flags.extend(
+        run_all_compliance_checks(
+            entries=all_entries,
+            staff_schedule=staff_schedule,
+            students_by_id=students_by_id,
+            period_config=period_config,
+        )
+    )
 
     # ---------------------------------------------------------
     # 6. Build ScheduleProposal records
@@ -1889,6 +1572,9 @@ def schedule_iep_services_first(
             "period_times": period_config.period_times,
             "grade_groups": period_config.grade_groups,
             "group_periods": period_config.group_periods,
+            "specials_titles": period_config.specials_titles,
+            "specials_sessions_per_week": period_config.specials_sessions_per_week,
+            "allow_specials_merge": period_config.allow_specials_merge,
         },
 
         "summary": {

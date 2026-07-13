@@ -17,7 +17,6 @@ const emptyForm: StaffCreatePayload = {
   title: "",
   grade: "",
   homeroom: "",
-  room: "",
   is_certified_sped: false,
   is_certified_enl: false,
   is_certified_slp: false,
@@ -52,7 +51,6 @@ export default function AddStaffModal({ schoolId, onClose, onCreated }: AddStaff
         title: form.title || undefined,
         grade: form.grade || undefined,
         homeroom: form.homeroom || undefined,
-        room: form.room || undefined,
       });
 
       onCreated();
@@ -68,7 +66,7 @@ export default function AddStaffModal({ schoolId, onClose, onCreated }: AddStaff
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>Add Staff Member</h2>
+          <h2 style={{ color: "#000000" }}>Add Staff Member</h2>
           <button className="modal-close" onClick={onClose} aria-label="Close">✕</button>
         </div>
 
@@ -124,13 +122,6 @@ export default function AddStaffModal({ schoolId, onClose, onCreated }: AddStaff
               <input
                 value={form.homeroom}
                 onChange={(e) => update("homeroom", e.target.value)}
-              />
-            </label>
-            <label>
-              Room
-              <input
-                value={form.room}
-                onChange={(e) => update("room", e.target.value)}
               />
             </label>
           </div>
