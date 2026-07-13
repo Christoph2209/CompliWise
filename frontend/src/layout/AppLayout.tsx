@@ -1,6 +1,16 @@
-import { Link, Outlet } from "react-router-dom";
+import { Link, Outlet, useNavigate } from "react-router-dom";
+import { useAuth } from "../context/authContext";
 
 export default function AppLayout() {
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+  const isAdminOrPrincipal = user?.role === "admin" || user?.role === "principal";
+
+  function handleLogout() {
+    logout();
+    navigate("/login");
+  }
+
   return (
     <div style={styles.container}>
       
@@ -11,12 +21,20 @@ export default function AppLayout() {
         <nav style={styles.nav}>
           <Link to="/" style={styles.link}>Dashboard</Link>
           <Link to="/students" style={styles.link}>Students</Link>
-          <Link to="/staff" style={styles.link}>Staff</Link>
+          {isAdminOrPrincipal && (
+            <Link to="/staff" style={styles.link}>Staff</Link>
+          )}
           <Link to="/student-schedules" style={styles.link}>Schedules</Link>
           <Link to="/teacher-schedules" style={styles.link}>Teacher Schedules</Link>
-          <Link to="/compliance" style={styles.link}>Compliance</Link>
+          {isAdminOrPrincipal && (
+            <Link to="/compliance" style={styles.link}>Compliance</Link>
+          )}
           <Link to="/flex_groups" style={styles.link}>Flex Groups</Link>
         </nav>
+
+        <button onClick={handleLogout} style={styles.logoutButton}>
+          Log out
+        </button>
       </aside>
 
       {/* Main Content */}
@@ -27,7 +45,6 @@ export default function AppLayout() {
     </div>
   );
 }
-
 const styles: any = {
   container: {
     display: "flex",
@@ -51,6 +68,17 @@ const styles: any = {
     textDecoration: "none",
     padding: "8px",
     borderRadius: "6px",
+  },
+  logoutButton: {
+    marginTop: "24px",
+    width: "100%",
+    padding: "10px",
+    background: "transparent",
+    color: "#fff",
+    border: "1px solid #ffffff55",
+    borderRadius: "6px",
+    cursor: "pointer",
+    fontSize: "14px",
   },
   main: {
     flex: 1,
