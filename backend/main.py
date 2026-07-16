@@ -1,12 +1,12 @@
 """CompliWise Scheduler Engine API."""
-
+from __future__ import annotations
 import os
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from passlib.context import CryptContext
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
 from database_service import (
@@ -120,6 +120,13 @@ class StaffCreate(BaseModel):
     is_certified_slp: bool
     can_deliver_setss: bool
     max_students_per_group: int
+    
+class CreateUserRequest(BaseModel):
+    email: EmailStr
+    password: str
+    role: str  # "admin" | "principal" | "teacher" | "aide"
+    staff_id: str | None = None  # optional — not every user needs a staff record
+
 
 # ---------------------------------------------------------------------------
 # Root / meta
@@ -187,6 +194,66 @@ def get_me(user: User = Depends(get_current_user), db: Session = Depends(get_db)
         ),
     }
     
+# ---------------------------------------------------------------------------
+# Admin
+# ---------------------------------------------------------------------------
+
+@app.post("/admin/users")
+def add_user(
+    payload: CreateUserRequest,
+    admin: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if admin.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can add users")
+
+    # Prevent duplicate accounts
+    existing = db.query(User).filter(User.email == payload.email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="A user with this email already exists")
+
+    # If linking to a staff member, make sure it exists and isn't already claimed
+    if payload.staff_id:
+        staff = db.query(StaffMember).filter(StaffMember.id == payload.staff_id).first()
+        if not staff:
+            raise HTTPException(status_code=404, detail="Staff member not found")
+
+        already_linked = db.query(User).filter(User.staff_id == payload.staff_id).first()
+        if already_linked:
+            raise HTTPException(status_code=400, detail="This staff member already has a linked account")
+
+    new_user = User(
+        email=payload.email,
+        password_hash=hash_password(payload.password),  # use whatever your auth module uses
+        role=payload.role,
+        staff_id=payload.staff_id,
+        school_id=admin.school_id,  # scope new user to the admin's school
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    return {"id": str(new_user.id), "email": new_user.email, "role": new_user.role}
+
+@app.get("/admin/staff/unassigned")
+def get_unassigned_staff(
+    admin: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if admin.role != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    linked_staff_ids = db.query(User.staff_id).filter(User.staff_id.isnot(None))
+    unassigned = (
+        db.query(StaffMember)
+        .filter(StaffMember.school_id == admin.school_id)
+        .filter(~StaffMember.id.in_(linked_staff_ids))
+        .all()
+    )
+    return [
+        {"id": str(s.id), "first_name": s.first_name, "last_name": s.last_name}
+        for s in unassigned
+    ]
 
 # ---------------------------------------------------------------------------
 # Students

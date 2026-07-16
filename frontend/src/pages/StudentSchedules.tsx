@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getSchedule, updateScheduleEntry } from "../api/schedule";
 import { getStaff } from "../api/staff";
+import { useAuth } from "../context/authContext";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 const PERIODS = [1, 2, 3, 4, 5, 6, 7];
@@ -28,10 +29,15 @@ interface ScheduleEntry {
 }
 
 export default function StudentSchedules() {
+  const { user } = useAuth();
+  const isTeacher = user?.role === "teacher";
+  const myStaffId = user?.staff_member?.id;
+
   const [entries, setEntries] = useState<ScheduleEntry[]>([]);
   const [selectedStudent, setSelectedStudent] = useState<string | null>(null);
   const [editingCell, setEditingCell] = useState<ScheduleEntry | null>(null);
   const [staff, setStaff] = useState<StaffMember[]>([]);
+
   useEffect(() => {
     async function load() {
       const [scheduleData, staffData] = await Promise.all([
@@ -39,16 +45,22 @@ export default function StudentSchedules() {
         getStaff(),
       ]);
 
-      setEntries(scheduleData || []);
+      // Teachers only ever see entries tied to their own staff_id
+      const visibleEntries =
+        isTeacher && myStaffId
+          ? (scheduleData || []).filter((e: ScheduleEntry) => e.staff_id === myStaffId)
+          : scheduleData || [];
+
+      setEntries(visibleEntries);
       setStaff(staffData || []);
 
-      if (scheduleData && scheduleData.length > 0) {
-        setSelectedStudent(scheduleData[0].student_id);
+      if (visibleEntries.length > 0) {
+        setSelectedStudent(visibleEntries[0].student_id);
       }
     }
 
     load();
-  }, []);
+  }, [isTeacher, myStaffId]);
 
   const students = Array.from(
     new Map(
@@ -83,10 +95,15 @@ export default function StudentSchedules() {
     setEditingCell(null);
   }
 
-  
   return (
     <div style={{ padding: "20px", fontFamily: "Arial" }}>
-      <h1 style={{ color: "#313131c7" }}>Student Schedules</h1>
+      <h1 style={{ color: "#313131c7" }}>
+        {isTeacher ? "My Students' Schedules" : "Student Schedules"}
+      </h1>
+
+      {isTeacher && students.length === 0 && (
+        <p>No students are currently assigned to your schedule.</p>
+      )}
 
       {/* Student selector */}
       <select
@@ -121,13 +138,14 @@ export default function StudentSchedules() {
                 const item = getClass(day, period);
                 const isEditing = editingCell?.id === item?.id;
 
-                const cellBackground = !item 
-                ? "#ffffff"
-                : item.is_pullout
-                ? "#e78282"
-                : item.is_flex_period
-                ? "#58ee7d"
-                : "#f9fafb";
+                const cellBackground = !item
+                  ? "#ffffff"
+                  : item.is_pullout
+                  ? "#e78282"
+                  : item.is_flex_period
+                  ? "#58ee7d"
+                  : "#f9fafb";
+
                 return (
                   <td
                     key={day}
@@ -137,17 +155,18 @@ export default function StudentSchedules() {
                       padding: "8px",
                       minHeight: "80px",
                       border: "1px solid #ddd",
-                      cursor: "pointer",
+                      cursor: isTeacher ? "default" : "pointer",
                     }}
                     onClick={() => {
-                      if (item) {
-                        setEditingCell({...item});
+                      // Teachers can view but not edit
+                      if (item && !isTeacher) {
+                        setEditingCell({ ...item });
                       }
                     }}
                   >
                     {!item ? (
                       <span>—</span>
-                    ) : isEditing && editingCell ? (
+                    ) : isEditing && editingCell && !isTeacher ? (
                       <div>
                         <input
                           value={editingCell.subject || ""}
@@ -206,26 +225,25 @@ export default function StudentSchedules() {
                           />
                         </label>
 
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (editingCell) {
+                              saveCell(editingCell);
+                            }
+                          }}
+                        >
+                          Save
+                        </button>
 
-                          if (editingCell) {
-                            saveCell(editingCell);
-                          }
-                        }}
-                      >
-                        Save
-                      </button>
-
-                      <button
-                        onClick={(e) => {
-                        e.stopPropagation();
-                        setEditingCell(null);
-                      }}
-                    >
-                      Cancel
-                    </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingCell(null);
+                          }}
+                        >
+                          Cancel
+                        </button>
                       </div>
                     ) : (
                       <div>

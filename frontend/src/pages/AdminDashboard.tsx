@@ -3,9 +3,11 @@ import { getStudents } from "../api/students";
 import { getStaff } from "../api/staff";
 import { getSchedule } from "../api/schedule";
 import { getComplianceFlags } from "../api/compliance";
-import { generateSchedule, resetSchedule } from "../api/schedule";
+import { resetSchedule } from "../api/schedule";
 import { useAuth } from "../context/authContext";
+import GenerateScheduleModal from "../components/GenerateScheduleModal";
 import AddStaffModal from "../components/AddStaffModal";
+import AddUserModal from "../components/AddUserModal";
 import "../components/Dashboard.css";
 
 export default function Dashboard() {
@@ -13,9 +15,10 @@ export default function Dashboard() {
   const [staff, setStaff] = useState<any[]>([]);
   const [schedule, setSchedule] = useState<any[]>([]);
   const [flags, setFlags] = useState<any[]>([]);
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
+  const [showAddUser, setShowAddUser] = useState(false); 
   const [showAddStaff, setShowAddStaff] = useState(false);
-
+  const [showGenerateSchedule, setShowGenerateSchedule] = useState(false);
   useEffect(() => {
     load();
   }, []);
@@ -50,11 +53,10 @@ export default function Dashboard() {
             <span>
               👤 {user.staff_member
                 ? `${user.full_name}`
-                : user.full_name || user.user_id}
+                : user.full_name || user.id}
                 {"\n\n"}
               <span className="role-badge">{user.role}</span>
             </span>
-            <button onClick={logout}>Log out</button>
           </>
         ) : (
           <span>Not logged in</span>
@@ -62,15 +64,9 @@ export default function Dashboard() {
       </div>
         <div className="actions">
           <button>🔄 Refresh</button>
-          <button onClick={async () => {
-            try {
-              await generateSchedule();
-              alert("Schedule generated successfully!");
-              await load();
-            } catch (error) {
-              console.error("Error generating schedule:", error);
-            }
-          }}>⚙️ Generate Schedule</button>
+          <button onClick={() => setShowGenerateSchedule(true)}>
+            ⚙️ Generate Schedule
+          </button>
           <button className="danger" onClick={async () => {
             try {
               await resetSchedule();
@@ -160,6 +156,11 @@ export default function Dashboard() {
               ➕ Add Staff
             </button>
           )}
+          {isAdmin && (
+            <button className="action-btn" onClick={() => setShowAddUser(true)}>
+              ➕ Add User
+            </button>
+          )}
           <button className="action-btn">🔄 Generate Schedule</button>
           <button className="action-btn">📊 Run Compliance Check</button>
         </div>
@@ -170,6 +171,19 @@ export default function Dashboard() {
           schoolId={user?.school_id || ""}
           onClose={() => setShowAddStaff(false)}
           onCreated={load}
+        />
+      )}
+      {showAddUser && (
+        <AddUserModal
+          schoolId={user?.school_id || ""}
+          onClose={() => setShowAddUser(false)}
+          onCreated={load}
+        />
+      )}
+      {showGenerateSchedule && (
+        <GenerateScheduleModal
+          onClose={() => setShowGenerateSchedule(false)}
+          onGenerated={load}
         />
       )}
     </div>
