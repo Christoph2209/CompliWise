@@ -11,6 +11,7 @@ import FlexGroups from "./pages/FlexGroups";
 import Login from "./pages/LoginPage";
 import { AuthProvider } from "./context/authContext";
 import ProtectedRoute from "./components/ProtectedRoute";
+import RoleRoute from "./components/RoleRoute";
 
 function App() {
   return (
@@ -28,10 +29,24 @@ function App() {
           >
             <Route path="/" element={<DashboardRouter />} />
             <Route path="/students" element={<Students />} />
-            <Route path="/staff" element={<Staff />} />
+            <Route
+              path="/staff"
+              element={
+                <RoleRoute allowed={["admin", "principal"]}>
+                  <Staff />
+                </RoleRoute>
+              }
+            />
             <Route path="/student-schedules" element={<StudentSchedules />} />
             <Route path="/teacher-schedules" element={<TeacherSchedules />} />
-            <Route path="/compliance" element={<CompliancePage />} />
+            <Route
+              path="/compliance"
+              element={
+                <RoleRoute allowed={["admin", "principal"]}>
+                  <CompliancePage />
+                </RoleRoute>
+              }
+            />
             <Route path="/flex_groups" element={<FlexGroups />} />
           </Route>
         </Routes>
