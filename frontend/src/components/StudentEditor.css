@@ -31,11 +31,13 @@
 
 .student-card:hover {
   transform: translateY(-3px);
-  box-shadow: 0 6px 18px rgba(0,0,0,0.15);
+  box-shadow: 0 6px 18px rgba(22, 4, 88, 0.918);
 }
 
 .student-name {
   font-size: 16px;
+  font: 'Inter', comic sans-serif;
+  color: #000000;
   font-weight: 600;
   margin-bottom: 10px;
 }
@@ -48,7 +50,7 @@
 }
 
 .student-modal {
-  background: rgb(5, 10, 53);
+  background: rgb(23, 27, 54);
   padding: 20px;
   border-radius: 10px;
   width: 400px;

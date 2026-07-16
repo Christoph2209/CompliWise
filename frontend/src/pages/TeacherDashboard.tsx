@@ -3,8 +3,8 @@ import { getSchedule } from "../api/schedule";
 import { useAuth } from "../context/authContext";
 import "../components/Dashboard.css";
 
-const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday"];
-const PERIODS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+const PERIODS = [1, 2, 3, 4, 5, 6, 7];
 
 export default function TeacherDashboard() {
   const { user } = useAuth();
@@ -18,7 +18,8 @@ export default function TeacherDashboard() {
   }, []);
 
   // Only this teacher's schedule entries
-  const myEntries = entries.filter((e) => e.staff_id === user?.staff_id);
+  const myStaffId = user?.staff_member?.id;
+  const myEntries = entries.filter((e) => e.staff_id === myStaffId);
 
   // Unique roster derived from those entries
   const roster = Array.from(
@@ -93,7 +94,7 @@ export default function TeacherDashboard() {
                 <td>{p}</td>
                 {DAYS.map((d) => {
                   const cls = getClass(d, p);
-                  return <td key={d}>{cls ? cls.student_name : ""}</td>;
+                  return <td key={d}>{cls ? cls.subject : ""}</td>;
                 })}
               </tr>
             ))}
