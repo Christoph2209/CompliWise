@@ -18,8 +18,8 @@ export default function Login() {
     try {
       await login(username, password);
       navigate("/");
-    } catch (err) {
-      setError("That username or password doesn't match. Give it another try.");
+    } catch (error) {
+      setError("That username or password doesn't match. Give it another try.\n" + (error instanceof Error ? ` (${error.message})` : ""));
     } finally {
       setIsSubmitting(false);
     }

@@ -3,7 +3,7 @@ import { getSchedule } from "../api/schedule";
 import StudentModal from "../components/StudentModal";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
-const PERIODS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+const PERIODS = [1, 2, 3, 4, 5, 6, 7];
 
 const CACHE_KEY = "schedule_cache_v1";
 const CACHE_TTL = 1000 * 60 * 5;

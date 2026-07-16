@@ -3,21 +3,8 @@ import { useAuth } from "../context/authContext";
 import type { Role } from "../context/authTypes";
 
 
-export default function RoleRoute({
-
-    allowed,
-    children
-
-}:{
-    allowed:Role[],
-    children:React.ReactNode
-}){
-
-
+export default function RoleRoute({allowed, children}: {allowed:Role[], children:React.ReactNode}){
     const {user}=useAuth();
-
-
-
     if(!user){
         return (
             <Navigate
@@ -25,9 +12,6 @@ export default function RoleRoute({
             />
         );
     }
-
-
-
     if(!allowed.includes(user.role)){
         return (
             <Navigate
@@ -35,8 +19,5 @@ export default function RoleRoute({
             />
         );
     }
-
-
-
     return children;
 }

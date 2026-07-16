@@ -106,6 +106,20 @@ class StudentUpdate(BaseModel):
     has_iep: bool | None = None
     mtss_tier: int | None = None
 
+class StaffCreate(BaseModel):
+    school_id: str
+    first_name: str
+    last_name: str
+    external_staff_id: str | None = None
+    title: str | None = None
+    grade: str | None = None
+    homeroom: str | None = None
+    room: str | None = None
+    is_certified_sped: bool
+    is_certified_enl: bool
+    is_certified_slp: bool
+    can_deliver_setss: bool
+    max_students_per_group: int
 
 # ---------------------------------------------------------------------------
 # Root / meta
@@ -159,7 +173,9 @@ def get_me(user: User = Depends(get_current_user), db: Session = Depends(get_db)
     return {
         "id": str(user.id),
         "email": user.email,
+        "full_name": user.full_name,
         "role": user.role,
+        "school_id": str(user.school_id),
         "staff_member": (
             {
                 "id": str(staff.id),
@@ -170,7 +186,7 @@ def get_me(user: User = Depends(get_current_user), db: Session = Depends(get_db)
             else None
         ),
     }
-
+    
 
 # ---------------------------------------------------------------------------
 # Students
@@ -311,24 +327,36 @@ def list_staff():
         raise HTTPException(status_code=500, detail=str(error))
 
 @app.post("/staff")
-def create_staff_member(staff_data: dict):
-    db = SessionLocal()
-
+def create_staff(staff: StaffCreate, db: Session = Depends(get_db)):
     try:
-        staff_member = StaffMember(**staff_data)
-        db.add(staff_member)
+        db_staff = StaffMember(**staff.dict())
+        db.add(db_staff)
         db.commit()
-        db.refresh(staff_member)
+        db.refresh(db_staff)
 
-        return {"success": True, "staff_member": staff_member}
+        return {
+            "staff": {
+                "id": str(db_staff.id),
+                "school_id": str(db_staff.school_id),
+                "external_staff_id": db_staff.external_staff_id,
+                "first_name": db_staff.first_name,
+                "last_name": db_staff.last_name,
+                "title": db_staff.title,
+                "grade": db_staff.grade,
+                "homeroom": db_staff.homeroom,
+                "room": db_staff.room,
+                "is_certified_sped": db_staff.is_certified_sped,
+                "is_certified_enl": db_staff.is_certified_enl,
+                "is_certified_slp": db_staff.is_certified_slp,
+                "can_deliver_setss": db_staff.can_deliver_setss,
+                "max_students_per_group": db_staff.max_students_per_group,
+                "created_at": db_staff.created_at.isoformat() if db_staff.created_at else None,
+            }
+        }
 
-    except Exception as e:
+    except Exception as error:
         db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-    
-    finally:
-        db.close()
-
+        raise HTTPException(status_code=400, detail=str(error))
 
 @app.get("/my-schedule")
 def my_schedule(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
