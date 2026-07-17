@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
-
+from compliance import run_all_compliance_checks, check_staff_coverage
 from database_service import (
     DBAPIError,
     DBConfigError,
@@ -32,7 +32,7 @@ from dmscheduler_db import (
     User,
 )
 from scheduler import DAYS, schedule_iep_services_first
-
+from scheduling_core import PeriodConfig
 # ---------------------------------------------------------------------------
 # App setup
 # ---------------------------------------------------------------------------
@@ -650,7 +650,108 @@ def list_compliance_flags():
     finally:
         db.close()
 
+@app.post("/run-compliance-check")
+def run_compliance_check(user: User = Depends(get_current_user)):
+    """
+    Runs every compliance check against the CURRENTLY SAVED schedule
+    plus overall staffing levels, and PERSISTS the resulting flags
+    to the database so they show up in /compliance-flags and the
+    dashboard feed. Does not touch schedule_entries -- only reads them.
+    """
+    try:
+        students = get_students()
+        staff = get_staff()
+        period_config = PeriodConfig()
 
+        students_by_id = {s["id"]: s for s in students if s.get("id")}
+
+        db = SessionLocal()
+        try:
+            saved_entries = db.query(ScheduleEntry).all()
+        finally:
+            db.close()
+
+        entries = [
+            {
+                "student_id": str(e.student_id),
+                "day_of_week": e.day_of_week,
+                "period": e.period,
+                "subject": e.subject,
+                "teacher": e.teacher_name,
+                "service_type": e.service_type,
+                "is_pullout": e.is_pullout,
+                "is_flex_period": e.is_flex_period,
+            }
+            for e in saved_entries
+        ]
+
+        staff_schedule: dict = {}
+        for entry in entries:
+            teacher = entry["teacher"]
+            if not teacher:
+                continue
+            student = students_by_id.get(entry["student_id"], {})
+            student_name = f"{student.get('first_name', '')} {student.get('last_name', '')}".strip()
+
+            staff_schedule.setdefault(teacher, {}) \
+                          .setdefault(entry["day_of_week"], {}) \
+                          .setdefault(entry["period"], [])
+
+            blocks = staff_schedule[teacher][entry["day_of_week"]][entry["period"]]
+            block = next(
+                (b for b in blocks if b["subject"] == entry["subject"] and b["service_type"] == entry["service_type"]),
+                None,
+            )
+            if block is None:
+                block = {
+                    "subject": entry["subject"],
+                    "service_type": entry["service_type"],
+                    "is_pullout": entry["is_pullout"],
+                    "students": [],
+                }
+                blocks.append(block)
+            block["students"].append({"student_id": entry["student_id"], "student_name": student_name})
+
+        flags = run_all_compliance_checks(
+            entries=entries,
+            staff_schedule=staff_schedule,
+            students_by_id=students_by_id,
+            period_config=period_config,
+            students=students,
+            staff_members=staff,
+        )
+
+        critical_count = sum(1 for f in flags if f.get("severity") == "critical")
+        warning_count = sum(1 for f in flags if f.get("severity") == "warning")
+
+        school_year = os.getenv("SCHOOL_YEAR", "2026-2027")
+
+        schedule_run_id = create_schedule_run(
+            school_year=school_year,
+            name="Compliance Check",
+            summary={
+                "compliance_check_passed": critical_count == 0,
+                "open_critical_flags": critical_count,
+                "status": "compliance_check",
+            },
+        )
+
+        create_compliance_flags(flags, run_id=schedule_run_id)
+
+        return {
+            "success": True,
+            "flags": flags,
+            "summary": {
+                "total_flags": len(flags),
+                "critical": critical_count,
+                "warnings": warning_count,
+            },
+            "schedule_run_id": schedule_run_id,
+        }
+
+    except (DBConfigError, DBAPIError) as error:
+        raise HTTPException(status_code=500, detail=str(error))
+    
 # ---------------------------------------------------------------------------
 # FLEX groups
 # ---------------------------------------------------------------------------

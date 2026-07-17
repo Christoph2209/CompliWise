@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { getStudents } from "../api/students";
 import { getStaff } from "../api/staff";
 import { getSchedule } from "../api/schedule";
-import { getComplianceFlags } from "../api/compliance";
+import { getComplianceFlags, runComplianceCheck } from "../api/compliance";
 import { resetSchedule } from "../api/schedule";
 import { useAuth } from "../context/authContext";
 import GenerateScheduleModal from "../components/GenerateScheduleModal";
@@ -16,9 +16,18 @@ export default function Dashboard() {
   const [schedule, setSchedule] = useState<any[]>([]);
   const [flags, setFlags] = useState<any[]>([]);
   const { user } = useAuth();
-  const [showAddUser, setShowAddUser] = useState(false); 
+  const [showAddUser, setShowAddUser] = useState(false);
   const [showAddStaff, setShowAddStaff] = useState(false);
   const [showGenerateSchedule, setShowGenerateSchedule] = useState(false);
+
+  // Compliance check state
+  const [checkingCompliance, setCheckingCompliance] = useState(false);
+  const [complianceResult, setComplianceResult] = useState<{
+    flags: any[];
+    summary: { total_flags: number; critical: number; warnings: number };
+  } | null>(null);
+  const [complianceError, setComplianceError] = useState<string | null>(null);
+
   useEffect(() => {
     load();
   }, []);
@@ -35,6 +44,21 @@ export default function Dashboard() {
     setStaff(s2 || []);
     setSchedule(s3 || []);
     setFlags(s4 || []);
+  }
+
+  async function handleRunComplianceCheck() {
+    setCheckingCompliance(true);
+    setComplianceError(null);
+    setComplianceResult(null);
+    try {
+      const result = await runComplianceCheck();
+      setComplianceResult(result);
+    } catch (err) {
+      setComplianceError("Failed to run compliance check");
+      console.error(err);
+    } finally {
+      setCheckingCompliance(false);
+    }
   }
 
   const critical = flags.filter((f) => f.severity === "critical" || f.type === "critical");
@@ -83,32 +107,26 @@ export default function Dashboard() {
 
       {/* KPI CARDS */}
       <div className="kpi-grid">
-
         <div className="kpi-card">
           <div className="kpi-label">Students</div>
           <div className="kpi-value">{students.length}</div>
         </div>
-
         <div className="kpi-card">
           <div className="kpi-label">Staff</div>
           <div className="kpi-value">{staff.length}</div>
         </div>
-
         <div className="kpi-card">
           <div className="kpi-label">Schedule Entries</div>
           <div className="kpi-value">{schedule.length}</div>
         </div>
-
         <div className="kpi-card alert">
           <div className="kpi-label">Critical Issues</div>
           <div className="kpi-value">{critical.length}</div>
         </div>
-
         <div className="kpi-card warn">
           <div className="kpi-label">Warnings</div>
           <div className="kpi-value">{warnings.length}</div>
         </div>
-
       </div>
 
       {/* MAIN GRID */}
@@ -117,7 +135,6 @@ export default function Dashboard() {
         {/* ALERT FEED */}
         <div className="panel">
           <h2>🚨 Critical Alerts</h2>
-
           {critical.length === 0 ? (
             <p className="empty">No critical issues 🎉</p>
           ) : (
@@ -133,7 +150,6 @@ export default function Dashboard() {
         {/* WARNING FEED */}
         <div className="panel">
           <h2>⚠️ Warnings</h2>
-
           {warnings.length === 0 ? (
             <p className="empty">No warnings</p>
           ) : (
@@ -161,12 +177,66 @@ export default function Dashboard() {
               ➕ Add User
             </button>
           )}
-          <button className="action-btn">🔄 Generate Schedule</button>
-          <button className="action-btn">📊 Run Compliance Check</button>
+          <button className="action-btn" onClick={() => setShowGenerateSchedule(true)}>
+            🔄 Generate Schedule
+          </button>
+          <button
+            className="action-btn"
+            onClick={handleRunComplianceCheck}
+            disabled={checkingCompliance}
+          >
+            {checkingCompliance ? "Checking..." : "📊 Run Compliance Check"}
+          </button>
+
+          {checkingCompliance && (
+            <div className="progress-track">
+              <div className="progress-bar-indeterminate" />
+            </div>
+          )}
+
+          {complianceError && (
+            <p style={{ color: "#dc2626", fontSize: "0.85rem", marginTop: "0.5rem" }}>
+              {complianceError}
+            </p>
+          )}
+
+          {!checkingCompliance && complianceResult && (
+            <div className="compliance-result">
+              {complianceResult.flags.length === 0 ? (
+                <p style={{ color: "#16a34a", fontSize: "0.85rem" }}>
+                  ✅ No staffing issues found
+                </p>
+              ) : (
+                <>
+                  <p style={{ fontSize: "0.85rem", margin: "0.5rem 0" }}>
+                    <strong>{complianceResult.summary.critical}</strong> critical,{" "}
+                    <strong>{complianceResult.summary.warnings}</strong> warning
+                    {complianceResult.summary.warnings === 1 ? "" : "s"}
+                  </p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                    {complianceResult.flags.map((f, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          borderLeft: `3px solid ${f.severity === "critical" ? "#dc2626" : "#d97706"}`,
+                          paddingLeft: "0.6rem",
+                          fontSize: "0.8rem",
+                        }}
+                      >
+                        <strong>{f.title}</strong>
+                        <p style={{ margin: "0.15rem 0 0", color: "#4b5563" }}>{f.description}</p>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
 
       </div>
-        {showAddStaff && (
+
+      {showAddStaff && (
         <AddStaffModal
           schoolId={user?.school_id || ""}
           onClose={() => setShowAddStaff(false)}
