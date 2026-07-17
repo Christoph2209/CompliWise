@@ -15,16 +15,183 @@ to avoid a circular import (scheduler.py imports FROM this file).
 from typing import Any, Dict, List, Tuple
 
 from scheduling_core import (
+    DAYS,
     PeriodConfig,
     full_student_name,
     get_student_services,
     max_same_service_per_day,
+    session_length_for_service,
     MAX_PULLOUTS_PER_DAY,
     MAX_GEN_ED_CLASS_SIZE,
     MAX_SPECIALS_CLASS_SIZE,
     MAX_SERVICE_GROUP_SIZE,
     KNOWN_SPECIALS_SUBJECTS,
+    SPECIALS_MANDATED_MINUTES_PER_WEEK,
+    SPECIALS_SESSION_LENGTH_MINUTES,
+    DEFAULT_SPECIALS_SESSION_LENGTH_MINUTES,
 )
+
+IEP_RELATED_SERVICES = {
+    "speech": {"cert_field": "is_certified_slp", "label": "Speech/Language (SLP)"},
+    "setss": {"cert_field": "can_deliver_setss", "label": "SETSS / IEP Support"},
+    "enl": {"cert_field": "is_certified_enl", "label": "ENL"},
+}
+
+SPECIALS_TITLES = {
+    "PE": "Physical Education Teacher",
+    "Music": "Music Teacher",
+    "Art": "Art Teacher",
+}
+
+
+def get_homerooms(students: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Local copy of scheduler.py's get_homerooms -- duplicated (not
+    imported) to avoid a circular import, since scheduler.py imports
+    FROM this file.
+    """
+    homerooms: Dict[str, List[Dict[str, Any]]] = {}
+    for student in students:
+        homeroom = str(student.get("homeroom") or "").strip()
+        if not homeroom:
+            continue
+        homerooms.setdefault(homeroom, []).append(student)
+    return homerooms
+
+
+def check_staff_coverage(
+    students: List[Dict[str, Any]],
+    staff_members: List[Dict[str, Any]],
+    period_config: PeriodConfig,
+) -> List[Dict[str, Any]]:
+    """
+    Aggregate, school-wide staffing check. Runs independently of whether
+    per-student scheduling actually succeeded -- flags a hard staffing
+    gap ("zero qualified staff") as critical, and a soft capacity gap
+    ("staff exist but total demand exceeds what they can realistically
+    cover") as a warning.
+    """
+    flags: List[Dict[str, Any]] = []
+    periods_per_week = len(DAYS) * len(period_config.periods)
+
+    # ---- IEP-related pullout services (SLP, SETSS, ENL) ----
+    for service_key, config in IEP_RELATED_SERVICES.items():
+        qualified = [s for s in staff_members if s.get(config["cert_field"])]
+        qualified_count = len(qualified)
+
+        total_sessions_needed = 0
+        for student in students:
+            for service in get_student_services(student):
+                if service["service_type"].lower() != service_key:
+                    continue
+                session_length = session_length_for_service(service["service_type"])
+                total_sessions_needed += max(1, round(service["minutes"] / session_length))
+
+        if total_sessions_needed == 0:
+            continue
+
+        if qualified_count == 0:
+            flags.append({
+                "student_id": "multiple",
+                "flag_type": "staffing_gap",
+                "severity": "critical",
+                "title": f"No {config['label']} staff on record",
+                "description": (
+                    f"{total_sessions_needed} weekly session(s) of "
+                    f"{config['label']} are required across the student "
+                    f"population, but no staff member is marked as "
+                    f"qualified to deliver {config['label']}. Add or "
+                    f"certify a staff member for this service."
+                ),
+                "legal_reference": "Mandated service staffing requirement",
+                "affected_period": "school year",
+                "status": "open",
+            })
+            continue
+
+        estimated_capacity = qualified_count * periods_per_week
+
+        if total_sessions_needed > estimated_capacity:
+            flags.append({
+                "student_id": "multiple",
+                "flag_type": "staffing_capacity",
+                "severity": "warning",
+                "title": f"{config['label']} staffing may be insufficient",
+                "description": (
+                    f"{total_sessions_needed} weekly session(s) of "
+                    f"{config['label']} are required, but the "
+                    f"{qualified_count} qualified staff member(s) on "
+                    f"record can realistically cover at most "
+                    f"~{estimated_capacity} sessions/week between them. "
+                    f"Consider adding staff or reviewing service loads."
+                ),
+                "legal_reference": "Mandated service staffing requirement",
+                "affected_period": "school year",
+                "status": "open",
+            })
+
+    # ---- General specials (PE, Music, Art) ----
+    homerooms = get_homerooms(students)
+    num_homerooms = len(homerooms)
+
+    for subject, title in SPECIALS_TITLES.items():
+        qualified = [s for s in staff_members if s.get("title") == title]
+        qualified_count = len(qualified)
+
+        mandated_minutes = SPECIALS_MANDATED_MINUTES_PER_WEEK.get(subject)
+        session_length = SPECIALS_SESSION_LENGTH_MINUTES.get(
+            subject, DEFAULT_SPECIALS_SESSION_LENGTH_MINUTES
+        )
+        sessions_needed_per_homeroom = (
+            max(1, round(mandated_minutes / session_length))
+            if mandated_minutes
+            else period_config.specials_sessions_per_week.get(subject, 0)
+        )
+
+        if sessions_needed_per_homeroom == 0 or num_homerooms == 0:
+            continue
+
+        total_sessions_needed = num_homerooms * sessions_needed_per_homeroom
+
+        if qualified_count == 0:
+            flags.append({
+                "student_id": "multiple",
+                "flag_type": "staffing_gap",
+                "severity": "critical",
+                "title": f"No {subject} teacher on record",
+                "description": (
+                    f"{num_homerooms} homeroom(s) require {subject} "
+                    f"({sessions_needed_per_homeroom} session(s)/week each), "
+                    f"but no staff member has the title '{title}'. Add or "
+                    f"designate a {subject} teacher."
+                ),
+                "legal_reference": "Specials / mandated instructional minutes",
+                "affected_period": "school year",
+                "status": "open",
+            })
+            continue
+
+        estimated_capacity = qualified_count * periods_per_week
+
+        if total_sessions_needed > estimated_capacity:
+            flags.append({
+                "student_id": "multiple",
+                "flag_type": "staffing_capacity",
+                "severity": "warning",
+                "title": f"{subject} staffing may be insufficient",
+                "description": (
+                    f"{num_homerooms} homeroom(s) need {total_sessions_needed} "
+                    f"total {subject} session(s)/week, but the "
+                    f"{qualified_count} {title}(s) on staff can realistically "
+                    f"cover at most ~{estimated_capacity} sessions/week. "
+                    f"Consider adding staff or merging classes further."
+                ),
+                "legal_reference": "Specials / mandated instructional minutes",
+                "affected_period": "school year",
+                "status": "open",
+            })
+
+    return flags
 
 
 def validate_class_sizes(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -180,13 +347,6 @@ def validate_pullout_limits(
 
 
 def required_minutes_by_service(student: Dict[str, Any]) -> Dict[str, int]:
-    """
-    Total weekly required minutes per service_type for a student,
-    summed across however many raw service entries share that type.
-    Reuses get_student_services() from scheduling_core so this can
-    never drift out of sync with however minutes/service_type are
-    actually derived there.
-    """
     totals: Dict[str, int] = {}
     for svc in get_student_services(student):
         totals[svc["service_type"]] = totals.get(svc["service_type"], 0) + svc["minutes"]
@@ -199,12 +359,13 @@ def validate_weekly_service_minutes(
     period_config: PeriodConfig,
 ) -> List[Dict[str, Any]]:
     """
-    Sums ACTUAL scheduled minutes per (student, service_type) across
-    the whole week -- using real period durations from
-    period_config.period_duration_minutes(), NOT the
-    session_length_for_service() estimate used to decide sessions_needed
-    -- and flags any student whose weekly total falls short of what's
-    required (e.g. enl_minutes_required from the students table).
+    Sums scheduled minutes per (student, service_type) across the whole
+    week, using each service's own canonical session length
+    (session_length_for_service) -- the same source of truth the
+    scheduler used to decide sessions_needed in the first place -- NOT
+    the period's wall-clock duration. A 30-minute Speech session booked
+    into a 45-minute period slot should count as 30 delivered minutes,
+    not 45.
     """
     flags = []
     scheduled_minutes: Dict[Tuple[str, str], int] = {}
@@ -216,7 +377,7 @@ def validate_weekly_service_minutes(
         service_type = entry.get("service_type", "")
         if not service_type:
             continue
-        duration = period_config.period_duration_minutes(int(entry["period"]))
+        duration = session_length_for_service(service_type)
         key = (student_id, service_type)
         scheduled_minutes[key] = scheduled_minutes.get(key, 0) + duration
 
@@ -253,13 +414,24 @@ def run_all_compliance_checks(
     staff_schedule: Dict[str, Any],
     students_by_id: Dict[str, Dict[str, Any]],
     period_config: PeriodConfig,
+    students: List[Dict[str, Any]],
+    staff_members: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """Single entry point so scheduler.py calls one function instead of
-    importing and chaining four. Order doesn't matter -- each
-    validator is independent and just appends its own flags."""
+    """
+    Single entry point -- runs every compliance check at once.
+
+    Two of the checks (validate_staff_schedule, validate_class_sizes)
+    only need entries/staff_schedule from an already-built schedule.
+    check_staff_coverage needs the FULL raw students/staff rosters
+    (not staff_schedule.keys(), which are just teacher name strings
+    from whoever happened to get scheduled -- using that instead of
+    the real roster would silently miss "zero qualified staff exist"
+    cases and crash on .get() calls against plain strings).
+    """
     flags = []
     flags.extend(validate_staff_schedule(staff_schedule))
     flags.extend(validate_class_sizes(entries))
     flags.extend(validate_pullout_limits(entries, students_by_id))
     flags.extend(validate_weekly_service_minutes(entries, students_by_id, period_config))
+    flags.extend(check_staff_coverage(students, staff_members, period_config))
     return flags

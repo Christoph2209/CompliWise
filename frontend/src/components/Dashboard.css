@@ -74,7 +74,33 @@
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 16px;
 }
+.progress-track {
+  width: 100%;
+  height: 6px;
+  background: #e5e7eb;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 0.75rem;
+}
 
+.progress-bar-indeterminate {
+  width: 40%;
+  height: 100%;
+  background: #2563eb;
+  border-radius: 3px;
+  animation: indeterminate-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes indeterminate-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+
+.compliance-result {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #e5e7eb;
+}
 /* PANELS */
 .panel {
   background: rgb(255, 255, 255);

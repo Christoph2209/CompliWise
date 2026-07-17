@@ -1484,6 +1484,8 @@ def schedule_iep_services_first(
             staff_schedule=staff_schedule,
             students_by_id=students_by_id,
             period_config=period_config,
+            students=students,
+            staff_members=staff_members
         )
     )
 
