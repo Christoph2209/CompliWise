@@ -38,7 +38,7 @@ export default function CompliancePage() {
     } catch (err) {
       // roll back on failure
       setIssues(prevIssues);
-      setError("Failed to dismiss flag. Please try again.");
+      setError("Failed to dismiss flag. Please try again." + (err instanceof Error ? ` Error: ${err.message}` : ""));
     } finally {
       setResolvingIds((prev) => prev.filter((rid) => rid !== id));
     }
