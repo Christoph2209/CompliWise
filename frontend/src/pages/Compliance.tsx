@@ -1,39 +1,48 @@
 import { useEffect, useState } from "react";
-import { getComplianceFlags } from "../api/compliance";
+import { getComplianceFlags, resolveComplianceFlag } from "../api/compliance";
 
 const CACHE_KEY = "compliance_flags_v1";
 
 export default function CompliancePage() {
   const [issues, setIssues] = useState<any[]>([]);
-  const [dismissed, setDismissed] = useState<string[]>([]);
+  const [resolvingIds, setResolvingIds] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   async function load() {
     const data = await getComplianceFlags();
-
     const flags = data || [];
-
     setIssues(flags);
-
-    // cache only for offline fallback
     localStorage.setItem(CACHE_KEY, JSON.stringify(flags));
   }
 
   useEffect(() => {
     const cached = localStorage.getItem(CACHE_KEY);
-
     if (cached) {
       setIssues(JSON.parse(cached));
     }
-
     load();
-
     const interval = setInterval(load, 10000);
     return () => clearInterval(interval);
   }, []);
 
-  const visibleIssues = issues.filter(
-    (i) => !dismissed.includes(i.id)
-  );
+  async function handleDismiss(id: string) {
+    setResolvingIds((prev) => [...prev, id]);
+    setError(null);
+
+    // optimistic removal
+    const prevIssues = issues;
+    setIssues((prev) => prev.filter((i) => i.id !== id));
+
+    try {
+      await resolveComplianceFlag(id);
+    } catch (err) {
+      // roll back on failure
+      setIssues(prevIssues);
+      setError("Failed to dismiss flag. Please try again.");
+    } finally {
+      setResolvingIds((prev) => prev.filter((rid) => rid !== id));
+    }
+  }
 
   const getColor = (type: string) => {
     if (type === "critical") return "#fee2e2";
@@ -49,7 +58,13 @@ export default function CompliancePage() {
         Live data from database (ComplianceFlag table)
       </p>
 
-      {visibleIssues.length === 0 ? (
+      {error && (
+        <div style={{ background: "#fee2e2", padding: "10px", marginBottom: "10px" }}>
+          {error}
+        </div>
+      )}
+
+      {issues.length === 0 ? (
         <div style={{ background: "#dcfce7", padding: "10px" }}>
           ✅ No compliance issues found
         </div>
@@ -65,7 +80,7 @@ export default function CompliancePage() {
           </thead>
 
           <tbody>
-            {visibleIssues.map((issue) => (
+            {issues.map((issue) => (
               <tr
                 key={issue.id}
                 style={{ background: getColor(issue.severity || issue.type) }}
@@ -84,11 +99,10 @@ export default function CompliancePage() {
 
                 <td style={{ padding: "10px" }}>
                   <button
-                    onClick={() =>
-                      setDismissed([...dismissed, issue.id])
-                    }
+                    onClick={() => handleDismiss(issue.id)}
+                    disabled={resolvingIds.includes(issue.id)}
                   >
-                    Dismiss
+                    {resolvingIds.includes(issue.id) ? "Dismissing..." : "Dismiss"}
                   </button>
                 </td>
               </tr>

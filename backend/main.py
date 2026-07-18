@@ -1,7 +1,7 @@
 """CompliWise Scheduler Engine API."""
 from __future__ import annotations
 import os
-
+from uuid import UUID
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,6 +31,7 @@ from dmscheduler_db import (
     Student,
     User,
 )
+from datetime import datetime, timezone
 from scheduler import DAYS, schedule_iep_services_first
 from scheduling_core import PeriodConfig
 # ---------------------------------------------------------------------------
@@ -624,7 +625,7 @@ def list_compliance_flags():
     db = SessionLocal()
 
     try:
-        flags = db.query(ComplianceFlag).all()
+        flags = db.query(ComplianceFlag).filter(ComplianceFlag.status == "open").all()
 
         # get student names in one go
         student_ids = [f.student_id for f in flags if f.student_id]
@@ -752,6 +753,29 @@ def run_compliance_check(user: User = Depends(get_current_user)):
     except (DBConfigError, DBAPIError) as error:
         raise HTTPException(status_code=500, detail=str(error))
     
+
+@app.patch("/compliance-flags/{flag_id}/resolve")
+def resolve_compliance_flag(flag_id: UUID):
+    db = SessionLocal()
+
+    try:
+        flag = db.query(ComplianceFlag).filter(ComplianceFlag.id == flag_id).first()
+        if not flag:
+            raise HTTPException(status_code=404, detail="Compliance flag not found")
+
+        flag.status = "resolved"
+        flag.resolved_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(flag)
+
+        return {
+            "id": str(flag.id),
+            "status": flag.status,
+            "resolved_at": flag.resolved_at.isoformat() if flag.resolved_at else None,
+        }
+
+    finally:
+        db.close()
 # ---------------------------------------------------------------------------
 # FLEX groups
 # ---------------------------------------------------------------------------
