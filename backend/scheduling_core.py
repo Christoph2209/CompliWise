@@ -83,12 +83,13 @@ DEFAULT_SPECIALS_TITLES = {
     "PE Teacher": "PE",
     "Physical Education Teacher": "PE",
     "Music Teacher": "Music",
+    "Art Teacher": "Art",
 }
 
 # Subjects recognized as classroom-level Specials for sizing/validation
 # purposes (as opposed to individually-scheduled pullout services like
 # SETSS/ENL, which use MAX_SERVICE_GROUP_SIZE instead).
-KNOWN_SPECIALS_SUBJECTS = {"PE", "Music"}
+KNOWN_SPECIALS_SUBJECTS = {"PE", "Music", "Art"}
 
 # PE carries a legal weekly-minutes mandate rather than a fixed session
 # count. build_specials_schedule() derives PE's actual session count
@@ -100,12 +101,14 @@ SPECIALS_MANDATED_MINUTES_PER_WEEK = {
 SPECIALS_SESSION_LENGTH_MINUTES = {
     "PE": 30,
     "Music": 45,
+    "Art": 45,
 }
 DEFAULT_SPECIALS_SESSION_LENGTH_MINUTES = 45
 
 # Subjects with NO legal minute mandate (Music) are booked toward this
 # many sessions/week as a target, not a requirement.
 DEFAULT_SPECIALS_SESSIONS_PER_WEEK = {
+    "PE": 2,
     "Music": 1,
 }
 
@@ -300,8 +303,8 @@ def session_length_for_service(service_type: str) -> int:
 
 MAX_FLEX_GROUP_SIZE = {
     "tier_2": 15,
-    "tier_3": 8,
-    "enrichment": 10,
+    "tier_3": 10,
+    "enrichment": 20,
 }
 
 FLEX_FOCUS_BY_NEED = {
@@ -319,9 +322,10 @@ MAX_SERVICE_GROUP_SIZE = {
     "OT": 5,
     "PT": 5,
     "Counseling": 8,
-    "FLEX": 15,
-    "PE": 35,
+    "FLEX": 30,
+    "PE": 120,
     "Music": 35,
+    "Art": 35,
 }
 
 

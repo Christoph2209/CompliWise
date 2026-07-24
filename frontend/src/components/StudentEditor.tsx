@@ -1,4 +1,3 @@
-import React from "react";
 import "./StudentEditor.css";
 
 interface Props {
