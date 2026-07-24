@@ -1,8 +1,12 @@
 """CompliWise Scheduler Engine API."""
 from __future__ import annotations
-import os
 
+from typing import Any
+import os
+import uuid
+from uuid import UUID
 from dotenv import load_dotenv
+import threading
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from passlib.context import CryptContext
@@ -31,6 +35,7 @@ from dmscheduler_db import (
     Student,
     User,
 )
+from datetime import datetime, timezone
 from scheduler import DAYS, schedule_iep_services_first
 from scheduling_core import PeriodConfig
 # ---------------------------------------------------------------------------
@@ -43,7 +48,7 @@ app = FastAPI(title="CompliWise Scheduler Engine")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5173").split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -127,6 +132,22 @@ class CreateUserRequest(BaseModel):
     role: str  # "admin" | "principal" | "teacher" | "aide"
     staff_id: str | None = None  # optional — not every user needs a staff record
 
+class ScheduleGenerationConfig(BaseModel):
+    periods: list[dict[str, Any]]
+    pullout_constraints: dict[str, Any]
+    specials_requirements: list[dict[str, Any]]
+    
+SCHEDULE_JOBS: dict[str, dict] = {}
+
+SCHEDULE_STAGES = [
+    "Building FLEX groups",
+    "Scheduling mandated IEP/ENL/related services",
+    "Scheduling Specials (PE/Music)",
+    "Filling remaining periods (FLEX/Lunch/Gen-Ed)",
+    "Running compliance validation",
+    "Building schedule proposals",
+    "Saving schedule to database",
+]
 
 # ---------------------------------------------------------------------------
 # Root / meta
@@ -536,7 +557,7 @@ def preview_priority():
 
 
 @app.post("/save-schedule")
-def save_schedule():
+def save_schedule(config: ScheduleGenerationConfig):
     """Generate schedules and store them in the scheduler database."""
     try:
         students = get_students()
@@ -547,6 +568,9 @@ def save_schedule():
             students=students,
             staff_members=staff,
             school_year=school_year,
+            # TODO: config.periods / config.pullout_constraints /
+            # config.specials_requirements are accepted from the frontend
+            # but not yet wired into the scheduler — see PeriodConfig.
         )
 
         schedule_entries = result["schedule_entries"]
@@ -614,7 +638,101 @@ def reset_generated_schedules():
     except (DBConfigError, DBAPIError) as error:
         raise HTTPException(status_code=500, detail=str(error))
 
+def _run_schedule_job(job_id: str, config: ScheduleGenerationConfig):
+    def progress(stage_index: int, message: str | None = None):
+        SCHEDULE_JOBS[job_id].update({
+            "current_stage": stage_index,
+            "stage_name": SCHEDULE_STAGES[stage_index],
+            "percent": int(((stage_index + 1) / len(SCHEDULE_STAGES)) * 100),
+            "message": message,
+        })
 
+    try:
+        SCHEDULE_JOBS[job_id]["status"] = "running"
+
+        students = get_students()
+        staff = get_staff()
+        school_year = os.getenv("SCHOOL_YEAR", "2026-2027")
+
+        result = schedule_iep_services_first(
+            students=students,
+            staff_members=staff,
+            school_year=school_year,
+            progress_callback=progress,  # see note below — needs threading into scheduler.py
+        )
+        schedule_entries = result["schedule_entries"]
+        compliance_flags = result["compliance_flags"]
+        flex_groups = result["flex_groups"]
+        flex_group_students = result["flex_group_students"]
+
+        critical_flags = [f for f in compliance_flags if f.get("severity") == "critical"]
+
+        schedule_run_id = create_schedule_run(
+            school_year=school_year,
+            name="Full School Schedule",
+            summary={
+                "compliance_check_passed": len(critical_flags) == 0,
+                "open_critical_flags": len(critical_flags),
+                "status": "draft",
+                "summary": result["summary"],
+            },
+        )
+
+        
+        create_schedule_entries(schedule_entries, run_id=schedule_run_id)
+        create_compliance_flags(compliance_flags, run_id=schedule_run_id)
+        create_flex_groups(flex_groups, run_id=schedule_run_id)
+        create_flex_group_students(flex_group_students, run_id=schedule_run_id)
+        progress(6, "Saving schedule to database")
+        SCHEDULE_JOBS[job_id].update({
+            "status": "complete",
+            "percent": 100,
+            "result": {
+                "success": True,
+                "summary": result["summary"],
+                "saved": {
+                    "schedule_entries": len(schedule_entries),
+                    "compliance_flags": len(compliance_flags),
+                    "flex_groups": len(flex_groups),
+                    "flex_group_students": len(flex_group_students),
+                },
+                "schedule_run_id": schedule_run_id,
+            },
+        })
+
+    except (DBConfigError, DBAPIError) as error:
+        SCHEDULE_JOBS[job_id].update({"status": "error", "error": str(error)})
+    except Exception as error:  # catch-all so a bad thread doesn't die silently
+        SCHEDULE_JOBS[job_id].update({"status": "error", "error": str(error)})
+
+
+@app.post("/schedule/generate/start")
+def start_schedule_generation(
+    config: ScheduleGenerationConfig,
+    user: User = Depends(get_current_user),
+):
+    job_id = str(uuid.uuid4())
+    SCHEDULE_JOBS[job_id] = {
+        "status": "queued",
+        "current_stage": -1,
+        "stage_name": None,
+        "percent": 0,
+        "result": None,
+        "error": None,
+    }
+
+    thread = threading.Thread(target=_run_schedule_job, args=(job_id, config), daemon=True)
+    thread.start()
+
+    return {"job_id": job_id}
+
+
+@app.get("/schedule/generate/status/{job_id}")
+def get_schedule_generation_status(job_id: str, user: User = Depends(get_current_user)):
+    job = SCHEDULE_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 # ---------------------------------------------------------------------------
 # Compliance flags
 # ---------------------------------------------------------------------------
@@ -624,7 +742,7 @@ def list_compliance_flags():
     db = SessionLocal()
 
     try:
-        flags = db.query(ComplianceFlag).all()
+        flags = db.query(ComplianceFlag).filter(ComplianceFlag.status == "open").all()
 
         # get student names in one go
         student_ids = [f.student_id for f in flags if f.student_id]
@@ -752,6 +870,29 @@ def run_compliance_check(user: User = Depends(get_current_user)):
     except (DBConfigError, DBAPIError) as error:
         raise HTTPException(status_code=500, detail=str(error))
     
+
+@app.patch("/compliance-flags/{flag_id}/resolve")
+def resolve_compliance_flag(flag_id: UUID):
+    db = SessionLocal()
+
+    try:
+        flag = db.query(ComplianceFlag).filter(ComplianceFlag.id == flag_id).first()
+        if not flag:
+            raise HTTPException(status_code=404, detail="Compliance flag not found")
+
+        flag.status = "resolved"
+        flag.resolved_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(flag)
+
+        return {
+            "id": str(flag.id),
+            "status": flag.status,
+            "resolved_at": flag.resolved_at.isoformat() if flag.resolved_at else None,
+        }
+
+    finally:
+        db.close()
 # ---------------------------------------------------------------------------
 # FLEX groups
 # ---------------------------------------------------------------------------

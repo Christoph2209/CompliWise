@@ -4,7 +4,7 @@ import csv
 import uuid
 from pathlib import Path
 
-from backend.dmscheduler_db import (
+from dmscheduler_db import (
     SessionLocal,
     School,
     Student,

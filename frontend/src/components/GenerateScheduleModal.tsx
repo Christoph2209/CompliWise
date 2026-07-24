@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { generateSchedule } from "../api/schedule";
+import { useState, useRef, useEffect } from "react";
+import { startScheduleGeneration, getScheduleGenerationStatus, type ScheduleJobStatus } from "../api/schedule";
 import "./GenerateScheduleModal.css";
 
 // ---------- Types ----------
@@ -65,6 +65,8 @@ function nextId(prefix: string) {
 
 type Tab = "periods" | "pullouts" | "specials";
 
+const POLL_INTERVAL_MS = 750;
+
 export default function GenerateScheduleModal({ onClose, onGenerated }: GenerateScheduleModalProps) {
   const [tab, setTab] = useState<Tab>("periods");
   const [periods, setPeriods] = useState<PeriodDefinition[]>(DEFAULT_PERIODS);
@@ -78,6 +80,26 @@ export default function GenerateScheduleModal({ onClose, onGenerated }: Generate
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [jobStatus, setJobStatus] = useState<ScheduleJobStatus | null>(null);
+
+  const pollRef = useRef<number | null>(null);
+
+  // Make sure a stray interval never survives the component unmounting
+  // (e.g. user navigates away mid-generation).
+  useEffect(() => {
+    return () => {
+      if (pollRef.current !== null) {
+        window.clearInterval(pollRef.current);
+      }
+    };
+  }, []);
+
+  function stopPolling() {
+    if (pollRef.current !== null) {
+      window.clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }
 
   // ---------- Period handlers ----------
 
@@ -155,6 +177,8 @@ export default function GenerateScheduleModal({ onClose, onGenerated }: Generate
     return null;
   }
 
+  // ---------- Submit + poll ----------
+
   async function handleSubmit() {
     const validationError = validate();
     if (validationError) {
@@ -163,6 +187,12 @@ export default function GenerateScheduleModal({ onClose, onGenerated }: Generate
     }
     setError(null);
     setIsSubmitting(true);
+    setJobStatus({
+      status: "queued",
+      current_stage: -1,
+      stage_name: null,
+      percent: 0,
+    });
 
     const config: ScheduleGenerationConfig = {
       periods,
@@ -171,18 +201,32 @@ export default function GenerateScheduleModal({ onClose, onGenerated }: Generate
     };
 
     try {
-      // NOTE: this assumes generateSchedule(config) is updated to accept
-      // this payload and forward it to the backend's schedule-generation
-      // endpoint. If generateSchedule() currently takes no arguments,
-      // its signature and the corresponding FastAPI route/Pydantic model
-      // will need to accept ScheduleGenerationConfig.
-      await generateSchedule(config);
-      await onGenerated();
-      onClose();
+      const { job_id } = await startScheduleGeneration(config);
+
+      pollRef.current = window.setInterval(async () => {
+        try {
+          const status = await getScheduleGenerationStatus(job_id);
+          setJobStatus(status);
+
+          if (status.status === "complete") {
+            stopPolling();
+            await onGenerated();
+            onClose();
+          } else if (status.status === "error") {
+            stopPolling();
+            setError(status.error || "Schedule generation failed. Check the console for details.");
+            setIsSubmitting(false);
+          }
+        } catch (pollErr) {
+          console.error("Error polling schedule generation status:", pollErr);
+          stopPolling();
+          setError("Lost connection while checking generation progress.");
+          setIsSubmitting(false);
+        }
+      }, POLL_INTERVAL_MS);
     } catch (err) {
-      console.error("Error generating schedule:", err);
-      setError("Something went wrong generating the schedule. Check the console for details.");
-    } finally {
+      console.error("Error starting schedule generation:", err);
+      setError("Something went wrong starting schedule generation. Check the console for details.");
       setIsSubmitting(false);
     }
   }
@@ -386,6 +430,20 @@ export default function GenerateScheduleModal({ onClose, onGenerated }: Generate
             </div>
           )}
         </div>
+
+        {isSubmitting && jobStatus && (
+          <div className="gsm-progress">
+            <div className="gsm-progress-track">
+              <div
+                className="gsm-progress-fill"
+                style={{ width: `${jobStatus.percent}%` }}
+              />
+            </div>
+            <div className="gsm-progress-label">
+              {jobStatus.stage_name || "Starting…"} ({jobStatus.percent}%)
+            </div>
+          </div>
+        )}
 
         {error && <div className="gsm-error">{error}</div>}
 

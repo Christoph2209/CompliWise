@@ -1108,6 +1108,7 @@ def schedule_iep_services_first(
     staff_members: List[Dict[str, Any]] | None = None,
     school_year: str = "2026-2027",
     period_config: Optional[PeriodConfig] = None,
+    progress_callback=None,  # NEW: optional callable(stage_index: int, message: str | None = None)
 ) -> Dict[str, Any]:
     """
     Main scheduler. See scheduling_core.py for PeriodConfig/constants
@@ -1139,6 +1140,9 @@ def schedule_iep_services_first(
     # ---------------------------------------------------------
     # 2. Build and place FLEX groups FIRST.
     # ---------------------------------------------------------
+    if progress_callback:
+        progress_callback(0, "Building FLEX groups")
+
     flex_groups = build_flex_groups(
         students=ranked_students,
         staff_members=staff_members,
@@ -1197,6 +1201,9 @@ def schedule_iep_services_first(
     # ---------------------------------------------------------
     # 3. Schedule required (mandated) services
     # ---------------------------------------------------------
+    if progress_callback:
+        progress_callback(1, "Scheduling mandated IEP/ENL/related services")
+        
     for student in ranked_students:
         student_id = student.get("student_id")
         student_name = full_student_name(student)
@@ -1314,6 +1321,9 @@ def schedule_iep_services_first(
     # ---------------------------------------------------------
     # 3.5. Schedule Specials (PE, Music) per classroom.
     # ---------------------------------------------------------
+    if progress_callback:
+        progress_callback(2, "Scheduling Specials (PE/Music)")
+        
     specials_entries, specials_flags = build_specials_schedule(
         students=ranked_students,
         staff_members=staff_members,
@@ -1341,6 +1351,9 @@ def schedule_iep_services_first(
     # 4. Fill remaining periods: FLEX / Lunch-Recess / Language Block
     #    / general-ed, all resolved per-student via period_config.
     # ---------------------------------------------------------
+    if progress_callback:
+        progress_callback(3, "Filling remaining periods (FLEX/Lunch/Gen-Ed)")
+        
     for student in ranked_students:
         student_id = student.get("student_id")
         student_name = full_student_name(student)
@@ -1478,6 +1491,9 @@ def schedule_iep_services_first(
     # ---------------------------------------------------------
     # 5. Validate
     # ---------------------------------------------------------
+    if progress_callback:
+        progress_callback(4, "Running compliance validation")
+    
     compliance_flags.extend(
         run_all_compliance_checks(
             entries=all_entries,
@@ -1492,6 +1508,9 @@ def schedule_iep_services_first(
     # ---------------------------------------------------------
     # 6. Build ScheduleProposal records
     # ---------------------------------------------------------
+    if progress_callback:
+        progress_callback(5, "Building schedule proposals")
+
     entries_by_student: Dict[str, List[Dict[str, Any]]] = {}
 
     for entry in all_entries:

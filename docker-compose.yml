@@ -1,0 +1,48 @@
+version: "3.8"
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-compliwise}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-compliwise}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Exposed on 5433 (not 5432) to avoid clashing with a native Postgres
+    # install already running on this machine.
+    ports:
+      - "5433:5432"
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-compliwise}:${POSTGRES_PASSWORD:-changeme}@db:5432/${POSTGRES_DB:-compliwise}
+      # Comma-separated list is fine — main.py's CORSMiddleware setup needs
+      # to split on "," once you make it env-driven (see chat).
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+    ports:
+      - "8000:8000"
+    # env_file: .env   # uncomment once you have a real .env with secrets
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Change this to the school server's actual LAN IP/hostname before
+        # deploying — staff browsers need to reach this address directly,
+        # and it must be baked in at build time (Vite env vars aren't
+        # readable at container runtime).
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+
+volumes:
+  pgdata:

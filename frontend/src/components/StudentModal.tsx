@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import{ useMemo } from "react";
 
 type ScheduleEntry = {
   day_of_week: string;
