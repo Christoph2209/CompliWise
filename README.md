@@ -1,113 +1,110 @@
 # CompliWise Scheduler Engine
 
-CompliWise is an automated school scheduling engine designed to generate compliant student schedules while prioritizing IEP services, intervention groups, staff availability, and scheduling constraints.
+CompliWise is an automated school scheduling engine that generates compliant student schedules while prioritizing IEP services, intervention groups, staff availability, and district scheduling constraints.
 
-The scheduler runs as a standalone FastAPI backend with its own database and API layer.
+It runs as a standalone FastAPI backend with its own database and API layer, and is designed to reduce the manual work of building master schedules while improving compliance with student service requirements and staffing limits.
+
+## Table of Contents
+
+- [Features](#features)
+- [Tech Stack](#tech-stack)
+- [Getting Started](#getting-started)
+- [Scheduling Workflow](#scheduling-workflow)
+- [Scheduling Algorithm](#scheduling-algorithm)
+- [Compliance Engine](#compliance-engine)
+- [API Reference](#api-reference)
+- [Roadmap](#roadmap)
 
 ## Features
 
-* Automated student scheduling
-* IEP service prioritization
-* Service-minute compliance tracking
-* Staff availability handling
-* Student/staff conflict prevention
-* Flex/WIN group scheduling
-* Schedule proposals and validation
-* Compliance flag generation
-* Teacher attendance support
-* Role-based access support
+- Automated student scheduling
+- IEP service prioritization
+- Service-minute compliance tracking
+- Staff availability handling
+- Student/staff conflict prevention
+- Flex/WIN group scheduling
+- Schedule proposals and validation (preview before publish)
+- Compliance flag generation
+- Teacher attendance support
+- Role-based access support
 
 ## Tech Stack
 
-Backend:
+| Layer      | Technology                     |
+|------------|---------------------------------|
+| Backend    | FastAPI, SQLAlchemy             |
+| Database   | PostgreSQL, Alembic migrations  |
+| Frontend   | React + TypeScript              |
 
-* FastAPI
-* SQLAlchemy
-* PostgreSQL
-* Alembic migrations
+## Getting Started
 
-Frontend:
+### Prerequisites
 
-* React + TypeScript
+- Python 3.10+
+- PostgreSQL
+- Node.js (for the frontend, if running locally)
 
-Database:
-
-* PostgreSQL
-
-## Setup
-
-Clone the repository:
+### 1. Clone the repository
 
 ```bash
 git clone <repository-url>
 cd CompliWise
 ```
 
-Create a virtual environment:
+### 2. Create and activate a virtual environment
 
 ```bash
 python -m venv venv
 ```
 
-Activate:
-
-Windows:
-
+**Windows**
 ```bash
 venv\Scripts\activate
 ```
 
-Mac/Linux:
-
+**Mac/Linux**
 ```bash
 source venv/bin/activate
 ```
 
-Install dependencies:
+### 3. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Create your environment file:
+### 4. Configure environment variables
 
-Windows:
-
+**Windows**
 ```bash
 copy .env.example .env
 ```
 
-Mac/Linux:
-
+**Mac/Linux**
 ```bash
 cp .env.example .env
 ```
 
-Configure:
+Then edit `.env`:
 
 ```env
 DATABASE_URL=postgresql://username:password@localhost/compliwise_db
 SCHOOL_YEAR=2026-2027
 ```
 
-## Database Setup
-
-Run migrations:
+### 5. Run database migrations
 
 ```bash
 alembic upgrade head
 ```
 
-
-## Running the Server
-
-Start FastAPI:
+### 6. Start the server
 
 ```bash
 uvicorn main:app --reload
 ```
 
-API documentation:
+Interactive API docs will be available at:
 
 ```text
 http://127.0.0.1:8000/docs
@@ -115,44 +112,36 @@ http://127.0.0.1:8000/docs
 
 ## Scheduling Workflow
 
-### 1. Load Data
+### 1. Load data
 
-Import:
+Import the following before generating a schedule:
 
-* Students
-* Staff members
-* Courses
-* Service requirements
-* Availability
-* Scheduling rules
+- Students
+- Staff members
+- Courses
+- Service requirements
+- Availability
+- Scheduling rules
 
-### 2. Generate Schedule Preview
+### 2. Generate a schedule preview
 
-Run the scheduler:
-
-```text
+```http
 POST /generate-schedule
 ```
 
-The scheduler creates:
+This creates schedule entries, schedule proposals, and compliance checks without overwriting any existing schedules — nothing is committed until you publish.
 
-* Schedule entries
-* Schedule proposals
-* Compliance checks
+### 3. Review compliance
 
-No existing schedules are overwritten during preview mode.
+The engine flags issues such as:
 
-### 3. Review Compliance
+- Missing IEP minutes
+- Student conflicts
+- Provider conflicts
+- Invalid placements
+- Capacity issues
 
-The engine checks for:
-
-* Missing IEP minutes
-* Student conflicts
-* Provider conflicts
-* Invalid placements
-* Capacity issues
-
-Example:
+Example flag:
 
 ```json
 {
@@ -162,25 +151,19 @@ Example:
 }
 ```
 
-### 4. Publish Schedule
+### 4. Publish the schedule
 
-After review:
-
-```text
+```http
 POST /publish-schedule
 ```
 
 This commits the generated schedule to the database.
 
----
+## Scheduling Algorithm
 
-# Scheduling Algorithm
+**Current version:** Greedy Constraint Scheduler
 
-## Current Version: Greedy Constraint Scheduler
-
-Students are ranked by scheduling priority.
-
-Priority order:
+Students are ranked by priority, and required services are placed first in that order:
 
 1. IEP students
 2. Students with higher service minutes
@@ -189,128 +172,87 @@ Priority order:
 5. MTSS Tier 3
 6. MTSS Tier 2
 
-The scheduler then places required services first.
+### Rules enforced
 
-## Scheduling Rules
+- **Student conflicts** — a student cannot be scheduled twice in the same period
+- **Staff conflicts** — a provider cannot serve multiple students/groups at the same time
+- **Service violations** — required minutes are tracked and enforced
+- **Capacity violations** — groups cannot exceed their defined limits
 
-The engine prevents:
+### Flex / WIN scheduling
 
-Student conflicts:
+Flex and WIN groups are generated after required services are placed. The scheduler:
 
-* A student cannot be scheduled twice in the same period.
-
-Staff conflicts:
-
-* A provider cannot serve multiple students/groups at the same time.
-
-Service violations:
-
-* Required minutes are tracked.
-
-Capacity violations:
-
-* Groups cannot exceed limits.
-
-## Flex / WIN Scheduling
-
-Flex groups are generated after required services.
-
-The scheduler:
-
-* Creates intervention groups
-* Assigns students
-* Assigns available staff
-* Places groups into available periods
+1. Creates intervention groups
+2. Assigns students
+3. Assigns available staff
+4. Places groups into open periods
 
 ## Compliance Engine
 
-The compliance engine creates flags when schedules violate rules.
+The compliance engine raises flags whenever a generated schedule violates a rule, including:
 
-Examples:
+- Missing IEP minutes
+- No available provider
+- Staff overload
+- Student conflict
+- Room conflict
 
-* Missing IEP minutes
-* No available provider
-* Staff overload
-* Student conflict
-* Room conflict
+## API Reference
 
----
-
-# API Endpoints
-
-## Health Check
+### Health
 
 ```http
 GET /
 ```
-
 Returns API status.
 
----
-
-## Students
+### Students
 
 ```http
 GET /students
 ```
-
 Returns all students.
 
 ```http
 POST /students
 ```
-
 Creates a student.
 
----
-
-## Staff
+### Staff
 
 ```http
 GET /staff
 ```
-
 Returns available staff.
 
----
-
-## Scheduler
-
-Generate schedule:
+### Scheduler
 
 ```http
 POST /generate-schedule
 ```
-
-Preview schedule:
+Generates a schedule preview.
 
 ```http
 GET /schedule-preview
 ```
-
-Publish:
+Retrieves the current schedule preview.
 
 ```http
 POST /publish-schedule
 ```
+Publishes the generated schedule.
 
----
+## Roadmap
 
-# Future Improvements
+- [ ] OR-Tools constraint optimization
+- [ ] Automatic classroom assignment
+- [ ] Room capacity management
+- [ ] Better teacher availability parsing
+- [ ] Teacher attendance dashboard
+- [ ] Historical scheduling analytics
+- [ ] Absense tracker for Teachers
 
-Planned improvements:
+## Project Goal
 
-* OR-Tools constraint optimization
-* Automatic classroom assignment
-* Room capacity management
-* Better teacher availability parsing
-* Parent-facing schedule portal
-* Teacher attendance dashboard
-* Historical scheduling analytics
-* Multi-school support
-
----
-
-# Project Goal
-
-CompliWise aims to reduce the manual work required to build school schedules while improving compliance with student service requirements and staffing limitations.
+CompliWise aims to reduce the manual work required to build school schedules while improving compliance with student service requirements and staffing constraints.
