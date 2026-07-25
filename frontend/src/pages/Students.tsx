@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getStudents, getMyStudents, updateStudent } from "../api/students";
 import { useAuth } from "../context/authContext";
+import StudentEditor from "../components/StudentEditor";
 import "../components/StudentEditor.css";
 
 export default function Students() {
@@ -46,27 +47,26 @@ export default function Students() {
   }
 
   async function saveStudent() {
-    try {
-      const payload = {
-        first_name: selectedStudent.first_name,
-        last_name: selectedStudent.last_name,
-        grade: Number(selectedStudent.grade),
-        homeroom: selectedStudent.homeroom,
-        has_iep: Boolean(selectedStudent.has_iep),
-        mtss_tier: selectedStudent.mtss_tier ? Number(selectedStudent.mtss_tier) : null,
-      };
+    // NOTE: grade and mtss_tier are stored as STRINGS ("K", "1" .. "5"
+    // and "tier_1"/"tier_2"/"tier_3"), never numbers. Number("K") and
+    // Number("tier_1") both evaluate to NaN, which serializes to null
+    // over the wire -- that was silently wiping grade/tier on save.
+    // Send them through untouched.
+    const payload = {
+      first_name: selectedStudent.first_name,
+      last_name: selectedStudent.last_name,
+      grade: selectedStudent.grade || null,
+      homeroom: selectedStudent.homeroom,
+      has_iep: Boolean(selectedStudent.has_iep),
+      mtss_tier: selectedStudent.mtss_tier || null,
+      enl_level: selectedStudent.enl_level || null,
+    };
 
-      const res = await updateStudent(selectedStudent.id, payload);
-      console.log("SUCCESS:", res);
-
-      await loadStudents();
-      setSelectedStudent(null);
-    } catch (err: any) {
-      console.log("FULL ERROR RESPONSE:");
-      console.log(err.response?.data);
-      console.log(err.response?.status);
-      console.log(err.message);
-    }
+    // Let errors propagate to StudentEditor, which surfaces them in
+    // the modal instead of only logging to the console.
+    await updateStudent(selectedStudent.id, payload);
+    await loadStudents();
+    setSelectedStudent(null);
   }
 
   const filteredStudents = students.filter((student) => {
@@ -80,31 +80,43 @@ export default function Students() {
   });
 
   return (
-    <div>
+    <div className="students-page">
       <h1>{isTeacher ? "My Students" : "Students"}</h1>
 
-      {/* Filters */}
-      <input
-        placeholder="Search student..."
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-      />
+      <div className="students-filters">
+        <input
+          className="students-search"
+          placeholder="Search student..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
 
-      <select onChange={(e) => setIepFilter(e.target.value)}>
-        <option value="">All IEP Status</option>
-        <option value="true">Has IEP</option>
-        <option value="false">No IEP</option>
-      </select>
+        <select
+          className="students-filter-select"
+          value={iepFilter}
+          onChange={(e) => setIepFilter(e.target.value)}
+        >
+          <option value="">All IEP Status</option>
+          <option value="true">Has IEP</option>
+          <option value="false">No IEP</option>
+        </select>
 
-      <select onChange={(e) => setTierFilter(e.target.value)}>
-        <option value="">All MTSS</option>
-        <option value="tier_1">Tier 1</option>
-        <option value="tier_2">Tier 2</option>
-        <option value="tier_3">Tier 3</option>
-      </select>
+        <select
+          className="students-filter-select"
+          value={tierFilter}
+          onChange={(e) => setTierFilter(e.target.value)}
+        >
+          <option value="">All MTSS</option>
+          <option value="tier_1">Tier 1</option>
+          <option value="tier_2">Tier 2</option>
+          <option value="tier_3">Tier 3</option>
+        </select>
+      </div>
 
       {isTeacher && filteredStudents.length === 0 && (
-        <p>No students are currently assigned to your schedule.</p>
+        <p className="students-empty">
+          No students are currently assigned to your schedule.
+        </p>
       )}
 
       <div className="student-grid">
@@ -119,87 +131,54 @@ export default function Students() {
             </div>
 
             <div className="student-info">
-              <div><strong>Grade:</strong> {student.grade}</div>
-              <div><strong>Homeroom:</strong> {student.homeroom || "N/A"}</div>
-              <div><strong>Tier:</strong> {student.mtss_tier || "None"}</div>
               <div>
-                <strong>IEP:</strong> {student.has_iep ? "Yes" : "No"}
+                <span className="student-info-label">Grade</span>
+                <span className="student-info-value">
+                  {student.grade || "—"}
+                </span>
+              </div>
+              <div>
+                <span className="student-info-label">Homeroom</span>
+                <span className="student-info-value">
+                  {student.homeroom || "N/A"}
+                </span>
+              </div>
+              <div>
+                <span className="student-info-label">Tier</span>
+                <span className="student-info-value">
+                  {student.mtss_tier || "None"}
+                </span>
+              </div>
+              <div>
+                <span className="student-info-label">IEP</span>
+                <span
+                  className={
+                    "student-badge " +
+                    (student.has_iep ? "student-badge-yes" : "student-badge-no")
+                  }
+                >
+                  {student.has_iep ? "Yes" : "No"}
+                </span>
+              </div>
+              <div>
+                <span className="student-info-label">ENL</span>
+                <span className="student-info-value">
+                  {student.enl_level || "None"}
+                </span>
               </div>
             </div>
           </div>
         ))}
       </div>
 
-      {/* EDIT / VIEW PANEL */}
       {selectedStudent && (
-        <div className="modal-backdrop" onClick={() => setSelectedStudent(null)}>
-          <div className="student-modal" onClick={(e) => e.stopPropagation()}>
-            <h2>{isTeacher ? "Student Details" : "Edit Student"}</h2>
-
-            <div className="modal-body">
-              <input
-                value={selectedStudent.first_name}
-                disabled={isTeacher}
-                onChange={(e) =>
-                  setSelectedStudent({ ...selectedStudent, first_name: e.target.value })
-                }
-              />
-
-              <input
-                value={selectedStudent.last_name}
-                disabled={isTeacher}
-                onChange={(e) =>
-                  setSelectedStudent({ ...selectedStudent, last_name: e.target.value })
-                }
-              />
-
-              <input
-                value={selectedStudent.grade}
-                disabled={isTeacher}
-                onChange={(e) =>
-                  setSelectedStudent({ ...selectedStudent, grade: e.target.value })
-                }
-              />
-
-              <input
-                value={selectedStudent.homeroom || ""}
-                disabled={isTeacher}
-                onChange={(e) =>
-                  setSelectedStudent({ ...selectedStudent, homeroom: e.target.value })
-                }
-              />
-
-              {!isTeacher && (
-                <input
-                  value={selectedStudent.enl_minutes_required || "None"}
-                  onChange={(e) =>
-                    setSelectedStudent({
-                      ...selectedStudent,
-                      enl_minutes_required: e.target.value,
-                    })
-                  }
-                />
-              )}
-
-              <label>
-                IEP:
-                <input
-                  type="checkbox"
-                  checked={selectedStudent.has_iep}
-                  disabled={isTeacher}
-                  onChange={(e) =>
-                    setSelectedStudent({ ...selectedStudent, has_iep: e.target.checked })
-                  }
-                />
-              </label>
-
-              {!isTeacher && <button onClick={saveStudent}>Save</button>}
-              <button onClick={() => setSelectedStudent(null)}>
-                {isTeacher ? "Close" : "Cancel"}
-              </button>
-            </div>
-          </div>
-        </div>
+        <StudentEditor
+          student={selectedStudent}
+          setStudent={setSelectedStudent}
+          onSave={saveStudent}
+          onCancel={() => setSelectedStudent(null)}
+          readOnly={isTeacher}
+        />
       )}
     </div>
   );

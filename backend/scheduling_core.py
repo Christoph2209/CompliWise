@@ -95,11 +95,11 @@ KNOWN_SPECIALS_SUBJECTS = {"PE", "Music", "Art"}
 # count. build_specials_schedule() derives PE's actual session count
 # from this and SPECIALS_SESSION_LENGTH_MINUTES["PE"].
 SPECIALS_MANDATED_MINUTES_PER_WEEK = {
-    "PE": 60,
+    "PE": 90,
 }
 
 SPECIALS_SESSION_LENGTH_MINUTES = {
-    "PE": 30,
+    "PE": 45,
     "Music": 45,
     "Art": 45,
 }
@@ -109,7 +109,8 @@ DEFAULT_SPECIALS_SESSION_LENGTH_MINUTES = 45
 # many sessions/week as a target, not a requirement.
 DEFAULT_SPECIALS_SESSIONS_PER_WEEK = {
     "PE": 2,
-    "Music": 1,
+    "Music": 2,
+    "Art": 1,
 }
 
 # Whole-classroom class, sized like a gen-ed homeroom class but with

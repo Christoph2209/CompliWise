@@ -1,7 +1,7 @@
 """CompliWise Scheduler Engine API."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 import os
 import uuid
 from uuid import UUID
@@ -97,7 +97,17 @@ def get_current_user(db: Session = Depends(get_db)) -> User:
 # ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
+class StaffUpdate(BaseModel):
+    grade: str | None = None
+    is_certified_sped: bool | None = None
+    is_certified_enl: bool | None = None
+    is_certified_slp: bool | None = None
+    can_deliver_setss: bool | None = None
 
+ALLOWED_STAFF_FIELDS = {
+    "grade", "is_certified_sped", "is_certified_enl",
+    "is_certified_slp", "can_deliver_setss"
+}
 class LoginRequest(BaseModel):
     email: str
     password: str
@@ -106,10 +116,10 @@ class LoginRequest(BaseModel):
 class StudentUpdate(BaseModel):
     first_name: str | None = None
     last_name: str | None = None
-    grade: int | None = None
+    grade: str | None = None
     homeroom: str | None = None
     has_iep: bool | None = None
-    mtss_tier: int | None = None
+    mtss_tier: str | None = None
 
 class StaffCreate(BaseModel):
     school_id: str
@@ -140,15 +150,14 @@ class ScheduleGenerationConfig(BaseModel):
 SCHEDULE_JOBS: dict[str, dict] = {}
 
 SCHEDULE_STAGES = [
-    "Building FLEX groups",
     "Scheduling mandated IEP/ENL/related services",
-    "Scheduling Specials (PE/Music)",
-    "Filling remaining periods (FLEX/Lunch/Gen-Ed)",
+    "Building homeroom classes",
+    "Building FLEX groups",
+    "Scheduling Specials (PE/Music/Art)",
     "Running compliance validation",
     "Building schedule proposals",
     "Saving schedule to database",
 ]
-
 # ---------------------------------------------------------------------------
 # Root / meta
 # ---------------------------------------------------------------------------
@@ -393,6 +402,7 @@ def get_my_students(user: User = Depends(get_current_user), db: Session = Depend
             "homeroom": student.homeroom,
             "has_iep": student.has_iep,
             "mtss_tier": student.mtss_tier,
+            "enl_level": student.enl_level,
         })
 
     return sorted(
@@ -445,6 +455,36 @@ def create_staff(staff: StaffCreate, db: Session = Depends(get_db)):
     except Exception as error:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(error))
+
+@app.put("/staff/{staff_id}")
+def update_staff(staff_id: str, payload: StaffUpdate):
+    db = SessionLocal()
+    try:
+        staff = db.query(StaffMember).filter(StaffMember.id == staff_id).first()
+        if not staff:
+            raise HTTPException(status_code=404, detail="Staff not found")
+
+        for field, value in payload.dict().items():
+            if field in ALLOWED_STAFF_FIELDS:
+                setattr(staff, field, value)
+
+        db.commit()
+        db.refresh(staff)
+
+        return {
+            "id": str(staff.id),
+            "first_name": staff.first_name,
+            "last_name": staff.last_name,
+            "title": staff.title,
+            "grade": staff.grade,
+            "is_certified_sped": staff.is_certified_sped,
+            "is_certified_enl": staff.is_certified_enl,
+            "is_certified_slp": staff.is_certified_slp,
+            "can_deliver_setss": staff.can_deliver_setss,
+            "homeroom": staff.homeroom,
+        }
+    finally:
+        db.close()
 
 @app.get("/my-schedule")
 def my_schedule(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -678,12 +718,12 @@ def _run_schedule_job(job_id: str, config: ScheduleGenerationConfig):
             },
         )
 
-        
+        progress(6, "Saving schedule to database")        
         create_schedule_entries(schedule_entries, run_id=schedule_run_id)
         create_compliance_flags(compliance_flags, run_id=schedule_run_id)
         create_flex_groups(flex_groups, run_id=schedule_run_id)
         create_flex_group_students(flex_group_students, run_id=schedule_run_id)
-        progress(6, "Saving schedule to database")
+
         SCHEDULE_JOBS[job_id].update({
             "status": "complete",
             "percent": 100,
