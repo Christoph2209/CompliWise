@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Version control
+.git/
+.gitignore
+.gitattributes
+
+# Editor / OS cruft
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Docker itself
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Local data / db files that shouldn't ship in the image
+*.sqlite3
+*.db
+data/

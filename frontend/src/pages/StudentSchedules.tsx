@@ -1,18 +1,66 @@
 import { useEffect, useState } from "react";
 import { getSchedule, updateScheduleEntry } from "../api/schedule";
 import { getStaff } from "../api/staff";
+import { useAuth } from "../context/authContext";
 
-const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday"];
-const PERIODS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+const PERIODS = [1, 2, 3, 4, 5, 6, 7];
+
+interface StaffMember {
+  id: string;
+  first_name: string;
+  last_name: string;
+  title?: string;
+}
+
+interface ScheduleEntry {
+  id: string;
+  student_id: string;
+  student_name: string;
+  grade: string;
+  day_of_week: string;
+  period: number;
+  subject: string;
+  staff_id?: string;
+  staff_name?: string;
+  service_type?: string;
+  is_pullout: boolean;
+  is_flex_period?: boolean;
+}
 
 export default function StudentSchedules() {
-  const [entries, setEntries] = useState<any[]>([]);
-  const [selectedStudent, setSelectedStudent] = useState("");
-  const [editingCell, setEditingCell] = useState<any>(null);
-  const [staff, setStaff] = useState<any[]>([]);
+  const { user } = useAuth();
+  const isTeacher = user?.role === "teacher";
+  const myStaffId = user?.staff_member?.id;
+
+  const [entries, setEntries] = useState<ScheduleEntry[]>([]);
+  const [selectedStudent, setSelectedStudent] = useState<string | null>(null);
+  const [editingCell, setEditingCell] = useState<ScheduleEntry | null>(null);
+  const [staff, setStaff] = useState<StaffMember[]>([]);
+
   useEffect(() => {
-    getSchedule().then(setEntries);
-  }, []);
+    async function load() {
+      const [scheduleData, staffData] = await Promise.all([
+        getSchedule(),
+        getStaff(),
+      ]);
+
+      // Teachers only ever see entries tied to their own staff_id
+      const visibleEntries =
+        isTeacher && myStaffId
+          ? (scheduleData || []).filter((e: ScheduleEntry) => e.staff_id === myStaffId)
+          : scheduleData || [];
+
+      setEntries(visibleEntries);
+      setStaff(staffData || []);
+
+      if (visibleEntries.length > 0) {
+        setSelectedStudent(visibleEntries[0].student_id);
+      }
+    }
+
+    load();
+  }, [isTeacher, myStaffId]);
 
   const students = Array.from(
     new Map(
@@ -37,7 +85,7 @@ export default function StudentSchedules() {
     );
   }
 
-  async function saveCell(updated: any) {
+  async function saveCell(updated: ScheduleEntry) {
     await updateScheduleEntry(updated.id, updated);
 
     setEntries((prev) =>
@@ -47,28 +95,22 @@ export default function StudentSchedules() {
     setEditingCell(null);
   }
 
-  useEffect(() => {
-  async function load() {
-    const [scheduleData, staffData] = await Promise.all([
-      getSchedule(),
-      getStaff(),
-    ]);
-
-    setEntries(scheduleData || []);
-    setStaff(staffData || []);
-  }
-
-  load();
-}, []);
   return (
     <div style={{ padding: "20px", fontFamily: "Arial" }}>
-      <h1>Student Schedules</h1>
+      <h1 style={{ color: "#313131c7" }}>
+        {isTeacher ? "My Students' Schedules" : "Student Schedules"}
+      </h1>
+
+      {isTeacher && students.length === 0 && (
+        <p>No students are currently assigned to your schedule.</p>
+      )}
 
       {/* Student selector */}
       <select
-        value={selectedStudent}
-        onChange={(e) => setSelectedStudent(e.target.value)}
+        value={selectedStudent || ""}
+        onChange={(e) => setSelectedStudent(e.target.value || null)}
       >
+        <option value="">Loading Students...</option>
         {students.map((s) => (
           <option key={s.id} value={s.id}>
             {s.name}
@@ -95,22 +137,36 @@ export default function StudentSchedules() {
               {DAYS.map((day) => {
                 const item = getClass(day, period);
                 const isEditing = editingCell?.id === item?.id;
-                const isFlex = item?.is_flex_period;
+
+                const cellBackground = !item
+                  ? "#ffffff"
+                  : item.is_pullout
+                  ? "#e78282"
+                  : item.is_flex_period
+                  ? "#58ee7d"
+                  : "#f9fafb";
+
                 return (
                   <td
                     key={day}
                     style={{
-                      background: "#f9fafb",
+                      background: cellBackground,
+                      color: "#000000",
                       padding: "8px",
                       minHeight: "80px",
                       border: "1px solid #ddd",
-                      cursor: "pointer",
+                      cursor: isTeacher ? "default" : "pointer",
                     }}
-                    onClick={() => item && setEditingCell(item)}
+                    onClick={() => {
+                      // Teachers can view but not edit
+                      if (item && !isTeacher) {
+                        setEditingCell({ ...item });
+                      }
+                    }}
                   >
                     {!item ? (
                       <span>—</span>
-                    ) : isEditing ? (
+                    ) : isEditing && editingCell && !isTeacher ? (
                       <div>
                         <input
                           value={editingCell.subject || ""}
@@ -169,11 +225,23 @@ export default function StudentSchedules() {
                           />
                         </label>
 
-                        <button onClick={() => saveCell(editingCell)}>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (editingCell) {
+                              saveCell(editingCell);
+                            }
+                          }}
+                        >
                           Save
                         </button>
 
-                        <button onClick={() => setEditingCell(null)}>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingCell(null);
+                          }}
+                        >
                           Cancel
                         </button>
                       </div>

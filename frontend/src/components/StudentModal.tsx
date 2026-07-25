@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import{ useMemo } from "react";
 
 type ScheduleEntry = {
   day_of_week: string;
@@ -22,15 +22,19 @@ export default function StudentModal({
   teacherSchedule,
   onClose,
 }: Props) {
-  if (!selectedSlot) return null;
+ const students = useMemo(() => {
+  if (!selectedSlot) return [];
 
-  const students = useMemo(() => {
-    return teacherSchedule.filter(
-      (student) =>
-        student.day_of_week === selectedSlot.day_of_week &&
-        Number(student.period) === Number(selectedSlot.period)
-    );
-  }, [teacherSchedule, selectedSlot]);
+  return teacherSchedule.filter(
+    (student) =>
+      student.day_of_week === selectedSlot.day_of_week &&
+      Number(student.period) === Number(selectedSlot.period)
+  );
+}, [teacherSchedule, selectedSlot]);
+
+if (!selectedSlot) {
+  return null; // early return now happens AFTER all hooks have run
+}
 
   return (
     <div

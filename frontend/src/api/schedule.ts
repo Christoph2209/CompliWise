@@ -1,50 +1,42 @@
+import type { ScheduleGenerationConfig } from "../components/GenerateScheduleModal";
 import { api } from "./clients";
-import axios from "axios";
 
 export async function getSchedule() {
-  const response = await api.get("/schedule");
-  return response.data;
-}
-
-export async function generateSchedule() {
-  const res = await fetch("http://localhost:8000/save-schedule", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-  });
-
-  if (!res.ok) throw new Error("Failed to generate schedule");
-
-  return res.json();
+  const { data } = await api.get("/schedule");
+  return data;
 }
 
 export async function getMySchedule() {
-  const res = await fetch("http://localhost:8000/my-schedule", {
-    method: "GET",
-    headers: {
-      "Content-Type": "application/json",
-    },
-  });
-  return res.json();
+  const { data } = await api.get("/my-schedule");
+  return data;
 }
 
 export async function resetSchedule() {
-  const res = await fetch("http://localhost:8000/reset-generated-schedules", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-  });
-
-  if (!res.ok) throw new Error("Failed to erase schedule");
-  return res.json();
+  const { data } = await api.post("/reset-generated-schedules");
+  return data;
 }
 
 export async function updateScheduleEntry(id: string, payload: any) {
-  const res = await axios.put(
-    `http://localhost:8000/schedule/${id}`,
-    payload
-  );
-  return res.data;
+  const { data } = await api.put(`/schedule/${id}`, payload);
+  return data;
+}
+
+export interface ScheduleJobStatus {
+  status: "queued" | "running" | "complete" | "error";
+  current_stage: number;
+  stage_name: string | null;
+  percent: number;
+  message?: string | null;
+  result?: any;
+  error?: string | null;
+}
+
+export async function startScheduleGeneration(config: ScheduleGenerationConfig) {
+  const { data } = await api.post("/schedule/generate/start", config);
+  return data as { job_id: string };
+}
+
+export async function getScheduleGenerationStatus(jobId: string) {
+  const { data } = await api.get(`/schedule/generate/status/${jobId}`);
+  return data as ScheduleJobStatus;
 }

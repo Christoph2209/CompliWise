@@ -5,8 +5,14 @@ export type Role =
   | "aide";
 
 
-export type User = {
-  user_id: string;
+export interface User {
+  id: string;
   role: Role;
-  staff_id?: string;
-};
+  full_name: string;
+  school_id: string;
+  staff_member: {
+    id: string;
+    first_name: string;
+    last_name: string;
+  } | null;
+}

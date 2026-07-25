@@ -1,74 +1,115 @@
-.modal-backdrop {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
-  background: rgba(0, 0, 0, 0.5);
+.students-page {
+  padding: 24px 28px;
+  background: #f9fafb;
+  min-height: 100%;
+}
 
+.students-page h1 {
+  margin: 0 0 18px;
+  font-size: 22px;
+  color: #111827;
+}
+
+.students-filters {
   display: flex;
-  justify-content: center;
-  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
 
-  z-index: 9999;
+.students-search {
+  flex: 1;
+  min-width: 220px;
+  padding: 8px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 13px;
+  background: #fff;
+  color: #111827;
+}
+
+.students-search:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+
+.students-filter-select {
+  padding: 8px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 13px;
+  background: #fff;
+  color: #111827;
+  cursor: pointer;
+}
+
+.students-empty {
+  color: #6b7280;
+  font-size: 14px;
 }
 
 .student-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 16px;
-  margin-top: 20px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 14px;
 }
 
 .student-card {
-  background: white;
-  border-radius: 12px;
-  padding: 14px;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 14px 16px;
   cursor: pointer;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
 }
 
 .student-card:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 6px 18px rgba(0,0,0,0.15);
+  border-color: #2563eb;
+  box-shadow: 0 2px 10px rgba(37, 99, 235, 0.12);
 }
 
 .student-name {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
+  color: #111827;
   margin-bottom: 10px;
 }
 
 .student-info {
-  font-size: 13px;
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.student-modal {
-  background: rgb(5, 10, 53);
-  padding: 20px;
-  border-radius: 10px;
-  width: 400px;
-  max-width: 90%;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+.student-info > div {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
 }
 
-
-.modal-body {
-
-    display:flex;
-    flex-direction:column;
-    gap:10px;
-
+.student-info-label {
+  color: #6b7280;
 }
 
+.student-info-value {
+  color: #111827;
+  font-weight: 500;
+}
 
-.modal-body input,
-.modal-body select {
+.student-badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
 
-    padding:8px;
+.student-badge-yes {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
 
+.student-badge-no {
+  background: #f3f4f6;
+  color: #6b7280;
 }
