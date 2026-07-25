@@ -84,12 +84,74 @@ export default function GenerateScheduleModal({ onClose, onGenerated }: Generate
 
   const pollRef = useRef<number | null>(null);
 
+  // ---------- Progress bar smoothing ----------
+  // The backend reports discrete stage/percent snapshots via polling,
+  // and several stages complete in milliseconds against small/test
+  // datasets -- so the raw jobStatus.percent can jump from 0% to 85%
+  // in a single poll, or sit frozen during the one genuinely slow
+  // step (saving to the database). displayedPercent decouples what's
+  // rendered from the raw poll value: a CSS transition on width turns
+  // any jump into a visible sweep, and a small "creep" nudges the bar
+  // forward during long-running stages so it never looks stalled.
+  // The percent LABEL still shows the real jobStatus.percent, so the
+  // numeric readout is always honest even while the bar creeps.
+  const [displayedPercent, setDisplayedPercent] = useState(0);
+  const creepRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!jobStatus) return;
+
+    const target = jobStatus.percent;
+
+    if (creepRef.current !== null) {
+      window.clearInterval(creepRef.current);
+      creepRef.current = null;
+    }
+
+    // Nudge toward the real target; the CSS transition renders this
+    // as a smooth sweep rather than an instant snap.
+    const nudge = window.setTimeout(() => setDisplayedPercent(target), 20);
+
+    // While the job is still in flight, creep the displayed percent
+    // forward a little past the last known target over time -- capped
+    // well short of 100 so it never claims completion before the
+    // server actually reports it.
+    if (jobStatus.status === "running" || jobStatus.status === "queued") {
+      const creepCap = Math.min(target + 8, 99);
+      creepRef.current = window.setInterval(() => {
+        setDisplayedPercent((current) => (current < creepCap ? current + 1 : current));
+      }, 400);
+    }
+
+    return () => {
+      window.clearTimeout(nudge);
+      if (creepRef.current !== null) {
+        window.clearInterval(creepRef.current);
+        creepRef.current = null;
+      }
+    };
+  }, [jobStatus?.percent, jobStatus?.status]);
+
+  // Snap cleanly to 100 on completion, clearing any lingering creep.
+  useEffect(() => {
+    if (jobStatus?.status === "complete") {
+      if (creepRef.current !== null) {
+        window.clearInterval(creepRef.current);
+        creepRef.current = null;
+      }
+      setDisplayedPercent(100);
+    }
+  }, [jobStatus?.status]);
+
   // Make sure a stray interval never survives the component unmounting
   // (e.g. user navigates away mid-generation).
   useEffect(() => {
     return () => {
       if (pollRef.current !== null) {
         window.clearInterval(pollRef.current);
+      }
+      if (creepRef.current !== null) {
+        window.clearInterval(creepRef.current);
       }
     };
   }, []);
@@ -193,6 +255,7 @@ export default function GenerateScheduleModal({ onClose, onGenerated }: Generate
       stage_name: null,
       percent: 0,
     });
+    setDisplayedPercent(0);
 
     const config: ScheduleGenerationConfig = {
       periods,
@@ -436,7 +499,7 @@ export default function GenerateScheduleModal({ onClose, onGenerated }: Generate
             <div className="gsm-progress-track">
               <div
                 className="gsm-progress-fill"
-                style={{ width: `${jobStatus.percent}%` }}
+                style={{ width: `${displayedPercent}%` }}
               />
             </div>
             <div className="gsm-progress-label">
