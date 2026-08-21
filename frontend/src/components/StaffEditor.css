@@ -36,6 +36,7 @@
 
 /* HEADER */
 .staff-name {
+  color:#333;
   font-size: 16px;
   font-weight: 600;
 }
@@ -96,6 +97,7 @@
 /* MODAL CARD */
 .modal-content {
   background: white;
+  color: #333;
   border-radius: 12px;
   padding: 24px 28px;
   width: 90%;
@@ -106,6 +108,7 @@
 }
 
 .modal-content h2 {
+  color: #333;
   margin: 0 0 4px 0;
   font-size: 18px;
   font-weight: 600;
@@ -180,10 +183,10 @@
 }
 
 .modal-actions button {
+  background:#b42318;
   padding: 8px 18px;
   border-radius: 8px;
-  border: 1px solid #ddd;
-  background: #eee;
+  border: 1px solid #7d7373;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
