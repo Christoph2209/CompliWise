@@ -3,15 +3,23 @@ from __future__ import annotations
 
 from typing import Any, Optional
 import os
+import setup as setup_module
 import uuid
-from uuid import UUID
-from dotenv import load_dotenv
 import threading
+import shutil
+import tempfile
+
+from pathlib import Path
+from fastapi import File, UploadFile
+from import_csv_data import import_students, import_staff
+from uuid import UUID
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
+from dotenv import load_dotenv
+from auth_utils import hash_password, verify_password
 from compliance import run_all_compliance_checks, check_staff_coverage
 from database_service import (
     DBAPIError,
@@ -31,6 +39,7 @@ from dmscheduler_db import (
     FlexGroupStudent,
     ScheduleEntry,
     SessionLocal,
+    School,
     StaffMember,
     Student,
     User,
@@ -53,12 +62,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
-
-# NOTE: single-process, in-memory "session" placeholder. Fine for local/dev
-# use, but should be replaced with real session/token auth before this goes
-# anywhere multi-user or multi-worker.
 CURRENT_USER = None
 
 
@@ -72,15 +75,6 @@ def get_db():
         yield db
     finally:
         db.close()
-
-
-def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
-
-
-def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
-
 
 def get_current_user(db: Session = Depends(get_db)) -> User:
     if CURRENT_USER is None:
@@ -112,6 +106,12 @@ class LoginRequest(BaseModel):
     email: str
     password: str
 
+class SetupInitializeRequest(BaseModel):
+    school_name: str
+    district_name: str | None = None
+    admin_email: EmailStr
+    admin_password: str
+    admin_full_name: str | None = None
 
 class StudentUpdate(BaseModel):
     first_name: str | None = None
@@ -152,8 +152,8 @@ SCHEDULE_JOBS: dict[str, dict] = {}
 SCHEDULE_STAGES = [
     "Scheduling mandated IEP/ENL/related services",
     "Building homeroom classes",
-    "Building FLEX groups",
     "Scheduling Specials (PE/Music/Art)",
+    "Building FLEX groups",
     "Running compliance validation",
     "Building schedule proposals",
     "Saving schedule to database",
@@ -199,6 +199,74 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
         "staff_id": str(user.staff_id) if user.staff_id else None,
     }
 
+@app.get("/setup/status")
+def get_setup_status(db: Session = Depends(get_db)):
+    connectable = setup_module.db_connectable(db)
+    return {
+        "database_connectable": connectable,
+        "setup_complete": connectable and setup_module.admin_exists(db),
+    }
+
+
+@app.post("/setup/initialize")
+def initialize_setup(payload: SetupInitializeRequest, db: Session = Depends(get_db)):
+    try:
+        setup_module.run_migrations()
+    except setup_module.SetupError as error:
+        raise HTTPException(status_code=503, detail=str(error))
+
+    if setup_module.admin_exists(db):
+        raise HTTPException(status_code=409, detail="Setup has already been completed.")
+
+    try:
+        school, admin = setup_module.create_school_and_admin(
+            db,
+            school_name=payload.school_name,
+            district_name=payload.district_name,
+            admin_email=payload.admin_email,
+            admin_password=payload.admin_password,
+            admin_full_name=payload.admin_full_name,
+        )
+    except setup_module.SetupError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
+    return {
+        "school_id": str(school.id),
+        "school_name": school.name,
+        "admin_id": str(admin.id),
+        "admin_email": admin.email,
+    }
+
+
+@app.post("/setup/import-csv")
+def setup_import_csv(
+    students_file: UploadFile | None = File(None),
+    staff_file: UploadFile | None = File(None),
+    db: Session = Depends(get_db),
+):
+    if not setup_module.admin_exists(db):
+        raise HTTPException(status_code=403, detail="Complete admin setup before importing data.")
+
+    school = db.query(School).first()
+    if not school:
+        raise HTTPException(status_code=400, detail="No school found — run /setup/initialize first.")
+
+    result = {"students_imported": 0, "staff_imported": 0}
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        if students_file is not None:
+            students_path = Path(tmpdir) / "students.csv"
+            with students_path.open("wb") as f:
+                shutil.copyfileobj(students_file.file, f)
+            result["students_imported"] = import_students(db, school, csv_path=students_path)
+
+        if staff_file is not None:
+            staff_path = Path(tmpdir) / "staff.csv"
+            with staff_path.open("wb") as f:
+                shutil.copyfileobj(staff_file.file, f)
+            result["staff_imported"] = import_staff(db, school, csv_path=staff_path)
+
+    return result
 
 @app.get("/me")
 def get_me(user: User = Depends(get_current_user), db: Session = Depends(get_db)):

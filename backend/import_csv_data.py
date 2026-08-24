@@ -1,8 +1,10 @@
 # import_csv_data.py
 
 import csv
+import re
 import uuid
 from pathlib import Path
+from typing import Optional, Union
 
 from dmscheduler_db import (
     SessionLocal,
@@ -15,6 +17,8 @@ from dmscheduler_db import (
 
 STUDENTS_CSV = "./data/Student_export.csv"
 STAFF_CSV = "./data/StaffMember_export.csv"  # change to workers.csv if needed
+
+PathLike = Union[str, Path]
 
 
 def yes_no(value):
@@ -45,6 +49,41 @@ def to_int(value, default=0):
         return default
 
 
+_GRADE_NUMBER_RE = re.compile(r"grade\s*(\d+)", re.IGNORECASE)
+
+
+def parse_grade_from_notes(notes) -> Optional[str]:
+    """
+    Some exports (e.g. the demo StaffMember CSV) have no dedicated grade
+    column -- the grade lives inside a free-text `notes` field instead,
+    mixed in with unrelated notes like "ICT support para" or "1:1 para
+    for IEP student". This pulls a grade out ONLY when the text clearly
+    encodes one, and returns None otherwise rather than guessing.
+
+    "Kindergarten"       -> "K"
+    "Grade 1"             -> "1"
+    "Grade 3 ICT"         -> "3"   (the "ICT" co-teaching detail is not
+                                     a grade and isn't captured here --
+                                     there's no StaffMember field for it
+                                     today; flagging separately)
+    "ICT support para"    -> None
+    "1:1 para for IEP student" -> None
+    ""                    -> None
+    """
+    text = clean(notes)
+    if not text:
+        return None
+
+    if "kindergarten" in text.lower():
+        return "K"
+
+    match = _GRADE_NUMBER_RE.search(text)
+    if match:
+        return match.group(1)
+
+    return None
+
+
 def get_or_create_school(db, name="Demo School"):
     school = db.query(School).filter(School.name == name).first()
 
@@ -65,12 +104,21 @@ def get_or_create_school(db, name="Demo School"):
     return school
 
 
-def import_students(db, school):
-    path = Path(STUDENTS_CSV)
+def import_students(db, school, csv_path: Optional[PathLike] = None) -> int:
+    """
+    Import/update students from a CSV.
+
+    csv_path defaults to the STUDENTS_CSV module constant (the original
+    CLI behavior). The setup wizard passes an explicit path to an
+    uploaded file instead.
+
+    Returns the number of rows imported/updated.
+    """
+    path = Path(csv_path) if csv_path is not None else Path(STUDENTS_CSV)
 
     if not path.exists():
-        print(f"Skipping students import. Missing file: {STUDENTS_CSV}")
-        return
+        print(f"Skipping students import. Missing file: {path}")
+        return 0
 
     count = 0
 
@@ -129,14 +177,24 @@ def import_students(db, school):
 
     db.commit()
     print(f"Imported/updated {count} students.")
+    return count
 
 
-def import_staff(db, school):
-    path = Path(STAFF_CSV)
+def import_staff(db, school, csv_path: Optional[PathLike] = None) -> int:
+    """
+    Import/update staff from a CSV.
+
+    csv_path defaults to the STAFF_CSV module constant (the original CLI
+    behavior). The setup wizard passes an explicit path to an uploaded
+    file instead.
+
+    Returns the number of rows imported/updated.
+    """
+    path = Path(csv_path) if csv_path is not None else Path(STAFF_CSV)
 
     if not path.exists():
-        print(f"Skipping staff import. Missing file: {STAFF_CSV}")
-        return
+        print(f"Skipping staff import. Missing file: {path}")
+        return 0
 
     count = 0
 
@@ -182,7 +240,10 @@ def import_staff(db, school):
             staff.last_name = last_name or staff.last_name
 
             staff.title = clean(row.get("title") or row.get("Title"))
-            staff.grade = clean(row.get("grade") or row.get("Grade"))
+            staff.grade = (
+                clean(row.get("grade") or row.get("Grade"))
+                or parse_grade_from_notes(row.get("notes") or row.get("Notes"))
+            )
             staff.homeroom = clean(row.get("homeroom") or row.get("Homeroom"))
             staff.room = clean(row.get("room") or row.get("Room"))
 
@@ -214,9 +275,10 @@ def import_staff(db, school):
 
     db.commit()
     print(f"Imported/updated {count} staff members.")
+    return count
 
 
-def import_student_services(db, school):
+def import_student_services(db, school, csv_path: Optional[PathLike] = None) -> int:
     """
     Optional helper if your student CSV has simple service columns.
 
@@ -227,12 +289,16 @@ def import_student_services(db, school):
       service_is_pullout
 
     For more complex IEP data, we should make a separate services.csv.
-    """
 
-    path = Path(STUDENTS_CSV)
+    NOTE: not currently wired into the setup wizard's /setup/import-csv
+    endpoint -- that endpoint only calls import_students/import_staff.
+    Wire this in too (with its own file upload) once there's a real
+    services CSV format to test against.
+    """
+    path = Path(csv_path) if csv_path is not None else Path(STUDENTS_CSV)
 
     if not path.exists():
-        return
+        return 0
 
     count = 0
 
@@ -289,6 +355,7 @@ def import_student_services(db, school):
 
     db.commit()
     print(f"Imported/updated {count} student services.")
+    return count
 
 
 def main():
