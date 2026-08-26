@@ -5,6 +5,7 @@ import { useAuth } from "../context/authContext";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 const PERIODS = [1, 2, 3, 4, 5, 6, 7];
+const SPECIALS_SUBJECTS = ["PE", "Music", "Art"];
 
 interface StaffMember {
   id: string;
@@ -26,6 +27,14 @@ interface ScheduleEntry {
   service_type?: string;
   is_pullout: boolean;
   is_flex_period?: boolean;
+}
+function isSpecialsEntry(item: ScheduleEntry) {
+  const base = item.subject?.split(" - ")[0]?.trim();
+  return SPECIALS_SUBJECTS.includes(base || "");
+}
+
+function isLunchEntry(item: ScheduleEntry) {
+  return item.subject === "Lunch/Recess";
 }
 
 export default function StudentSchedules() {
@@ -139,12 +148,16 @@ export default function StudentSchedules() {
                 const isEditing = editingCell?.id === item?.id;
 
                 const cellBackground = !item
-                  ? "#ffffff"
-                  : item.is_pullout
-                  ? "#e78282"
-                  : item.is_flex_period
-                  ? "#58ee7d"
-                  : "#f9fafb";
+                ? "#ffffff"
+                : item.is_pullout
+                ? "#e78282"
+                : item.is_flex_period
+                ? "#58ee7d"
+                : isLunchEntry(item)
+                ? "#fff3b0"   // light yellow
+                : isSpecialsEntry(item)
+                ? "#a8d8f0"   // light blue
+                : "#f9fafb";
 
                 return (
                   <td

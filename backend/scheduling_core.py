@@ -115,7 +115,7 @@ DEFAULT_SPECIALS_SESSIONS_PER_WEEK = {
 
 # Whole-classroom class, sized like a gen-ed homeroom class but with
 # headroom for two homerooms to combine into one session.
-MAX_GEN_ED_CLASS_SIZE = 30
+MAX_GEN_ED_CLASS_SIZE = 32
 MAX_SPECIALS_CLASS_SIZE = MAX_GEN_ED_CLASS_SIZE * 2
 
 

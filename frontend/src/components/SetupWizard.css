@@ -1,0 +1,263 @@
+/*
+  Setup wizard styling.
+
+  Direction: a school attendance ledger, not a generic SaaS onboarding
+  screen. The left rail reads like a roll-call sheet (tick marks, rule
+  lines, monospace status column); the right side is the actual form.
+
+  Fonts are system stacks on purpose -- this screen can run before
+  anyone's confirmed the school server has outbound internet, so no
+  @import/CDN font fetch.
+*/
+
+:root {
+  --sw-ink: #1b2a28;
+  --sw-ink-2: #24413c;
+  --sw-paper: #eef1ec;
+  --sw-paper-dim: #e2e6df;
+  --sw-accent: #d9a441;
+  --sw-accent-ink: #4a3410;
+  --sw-text: #1b2a28;
+  --sw-muted: #5b6b66;
+  --sw-error: #b3432b;
+
+  --sw-serif: Georgia, "Source Serif Pro", "Iowan Old Style", serif;
+  --sw-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --sw-mono: ui-monospace, "SFMono-Regular", "IBM Plex Mono", Consolas, "Liberation Mono", monospace;
+}
+
+.setup-wizard {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--sw-paper-dim);
+  font-family: var(--sw-sans);
+  color: var(--sw-text);
+  padding: 24px;
+}
+
+.setup-wizard__panel {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  width: 100%;
+  max-width: 880px;
+  min-height: 520px;
+  background: var(--sw-paper);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 24px 60px -24px rgba(27, 42, 40, 0.45);
+}
+
+.setup-wizard__ledger-col {
+  background: var(--sw-ink);
+  color: var(--sw-paper);
+  padding: 32px 24px;
+  display: flex;
+  flex-direction: column;
+}
+
+.setup-wizard__brand {
+  font-family: var(--sw-serif);
+  font-size: 22px;
+  letter-spacing: 0.01em;
+}
+
+.setup-wizard__brand-sub {
+  font-family: var(--sw-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--sw-accent);
+  margin: 4px 0 40px;
+}
+
+.setup-ledger {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.setup-ledger__row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 12px 0;
+  border-top: 1px solid rgba(238, 241, 236, 0.14);
+  font-family: var(--sw-mono);
+  font-size: 13px;
+  color: rgba(238, 241, 236, 0.45);
+  transition: color 0.2s ease;
+}
+
+.setup-ledger__row:last-child {
+  border-bottom: 1px solid rgba(238, 241, 236, 0.14);
+}
+
+.setup-ledger__mark {
+  width: 14px;
+  display: inline-block;
+  text-align: center;
+}
+
+.setup-ledger__row--active {
+  color: var(--sw-accent);
+}
+
+.setup-ledger__row--done {
+  color: var(--sw-paper);
+}
+
+.setup-ledger__row--done .setup-ledger__mark {
+  color: var(--sw-accent);
+}
+
+.setup-wizard__content-col {
+  padding: 40px 44px;
+  display: flex;
+  align-items: center;
+}
+
+.setup-wizard__state {
+  width: 100%;
+  max-width: 380px;
+}
+
+.setup-wizard__state h1 {
+  font-family: var(--sw-serif);
+  font-size: 26px;
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+.setup-wizard__state > p {
+  color: var(--sw-muted);
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0 0 24px;
+}
+
+.setup-wizard__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+
+.setup-wizard__field span {
+  font-family: var(--sw-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--sw-muted);
+}
+
+.setup-wizard__field input {
+  font-family: var(--sw-sans);
+  font-size: 15px;
+  padding: 10px 12px;
+  border: 1px solid #c7cec5;
+  border-radius: 4px;
+  background: #fff;
+  color: var(--sw-text);
+}
+
+.setup-wizard__field input:focus-visible {
+  outline: 2px solid var(--sw-accent);
+  outline-offset: 1px;
+  border-color: var(--sw-accent);
+}
+
+.setup-wizard__divider {
+  border: none;
+  border-top: 1px solid #d7dcd2;
+  margin: 8px 0 20px;
+}
+
+.setup-wizard__error {
+  background: rgba(179, 67, 43, 0.1);
+  border: 1px solid rgba(179, 67, 43, 0.3);
+  color: var(--sw-error);
+  font-size: 13px;
+  padding: 10px 12px;
+  border-radius: 4px;
+  margin: 0 0 16px;
+}
+
+.setup-wizard__actions {
+  display: flex;
+  gap: 12px;
+}
+
+.setup-wizard__btn {
+  font-family: var(--sw-sans);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 11px 20px;
+  border-radius: 4px;
+  border: none;
+  background: var(--sw-ink);
+  color: var(--sw-paper);
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.setup-wizard__btn:hover:not(:disabled) {
+  background: var(--sw-ink-2);
+}
+
+.setup-wizard__btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.setup-wizard__btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.setup-wizard__btn--ghost {
+  background: transparent;
+  color: var(--sw-ink);
+  border: 1px solid #c7cec5;
+}
+
+.setup-wizard__btn--ghost:hover:not(:disabled) {
+  background: rgba(27, 42, 40, 0.06);
+}
+
+.setup-wizard__btn:focus-visible {
+  outline: 2px solid var(--sw-accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  .setup-wizard__panel {
+    grid-template-columns: 1fr;
+  }
+
+  .setup-wizard__ledger-col {
+    padding: 24px;
+  }
+
+  .setup-ledger {
+    flex-direction: row;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  .setup-ledger__row {
+    border: none;
+    padding: 0;
+  }
+
+  .setup-ledger__row:last-child {
+    border: none;
+  }
+
+  .setup-wizard__content-col {
+    padding: 28px 24px;
+  }
+}
