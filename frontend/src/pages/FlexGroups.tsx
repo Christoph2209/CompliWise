@@ -1,49 +1,102 @@
 import { useEffect, useState } from "react";
 import { getFlexGroups } from "../api/flex";
 
+interface FlexGroupRaw {
+    name: string;
+    staff_name: string;
+    day_of_week?: string;
+    student_id?: string;
+    student_name?: string;
+    period?: string | number;
+}
+
+interface FlexGroupStudent {
+    id: string;
+    name: string;
+}
+
+interface FlexGroupCard {
+    id: string;
+    name: string;
+    staff_name: string;
+    period?: string | number;
+    days: string[];
+    students: FlexGroupStudent[];
+}
+
 export default function FlexGroups() {
-    const [groups, setGroups] = useState<any[]>([]);
-    const [selectedGroup, setSelectedGroup] = useState<any>(null);
+    const [groups, setGroups] = useState<FlexGroupCard[]>([]);
+    const [selectedGroup, setSelectedGroup] = useState<FlexGroupCard | null>(null);
     const [search, setSearch] = useState("");
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         const fetchFlexGroups = async () => {
-            const flexGroups = await getFlexGroups();
-               const grouped = Object.values(
-                flexGroups.reduce((acc: any, g: any) => {
-                    // Group by name + teacher only — one card per group, not per day
+            try {
+                setLoading(true);
+                const flexGroups: FlexGroupRaw[] = await getFlexGroups();
+
+                const groupedMap = flexGroups.reduce<Record<string, FlexGroupCard>>((acc, g) => {
                     const key = `${g.name}-${g.staff_name}`;
+
                     if (!acc[key]) {
                         acc[key] = {
-                            ...g,
+                            id: key,
+                            name: g.name,
+                            staff_name: g.staff_name,
+                            period: g.period,
                             students: [],
                             days: []
                         };
                     }
-                    // Collect each day this group meets
+
                     if (g.day_of_week && !acc[key].days.includes(g.day_of_week)) {
                         acc[key].days.push(g.day_of_week);
                     }
-                    // Merge students, dedupe by id
-                    g.student_id && !acc[key].students.find((s: any) => s.id === g.student_id) &&
-                        acc[key].students.push({ id: g.student_id, name: g.student_name });
+
+                    if (g.student_id && !acc[key].students.some(s => s.id === g.student_id)) {
+                        acc[key].students.push({ id: g.student_id, name: g.student_name ?? "" });
+                    }
+
                     return acc;
-                }, {})
-            );
-            setGroups(grouped);
+                }, {});
+
+                setGroups(Object.values(groupedMap));
+                setError(null);
+            } catch (err) {
+                console.error("Failed to fetch flex groups:", err);
+                setError("Couldn't load flex groups. Try refreshing.");
+            } finally {
+                setLoading(false);
+            }
         };
         fetchFlexGroups();
     }, []);
 
-    const filteredGroups = groups.filter((group: any) => {
-        const q = search.toLowerCase();
-        if (!q) return true;
-        const teacherMatch = group.staff_name?.toLowerCase().includes(q);
-        const studentMatch = group.students?.some((s: any) =>
-            s.name?.toLowerCase().includes(q)
-        );
-        return teacherMatch || studentMatch;
-    });
+    // Close modal on Escape
+    useEffect(() => {
+        if (!selectedGroup) return;
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (e.key === "Escape") setSelectedGroup(null);
+        };
+        window.addEventListener("keydown", onKeyDown);
+        return () => window.removeEventListener("keydown", onKeyDown);
+    }, [selectedGroup]);
+
+    const q = search.toLowerCase();
+    const filteredGroups = groups
+        .map(group => ({
+            group,
+            matchingStudents: q
+                ? group.students.filter(s => s.name?.toLowerCase().includes(q))
+                : []
+        }))
+        .filter(({ group, matchingStudents }) => {
+            if (!q) return true;
+            const teacherMatch = group.staff_name?.toLowerCase().includes(q);
+            return teacherMatch || matchingStudents.length > 0;
+        });
 
     return (
         <div>
@@ -65,68 +118,78 @@ export default function FlexGroups() {
                 }}
             />
 
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "20px" }}>
-                {filteredGroups.map((group: any) => (
-                    <div
-                        key={group.id}
-                        onClick={() => setSelectedGroup(group)}
-                        style={{
-                            border: "1px solid #ccc",
-                            borderRadius: "12px",
-                            padding: "20px",
-                            cursor: "pointer",
-                            background: "#f5f5f5",
-                        }}
-                    >
-                        <h3>{group.name}</h3>
-                        <p>Teacher: {group.staff_name}</p>
-                        <p>{group.days.join(", ")} - Period {group.period}</p>
-                        {search && (
-                            <p style={{ fontSize: "12px", color: "#888" }}>
-                                {group.students?.filter((s: any) =>
-                                    s.name?.toLowerCase().includes(search.toLowerCase())
-                                ).length > 0 && (
-                                    <>
-                                        Matching students:{" "}
-                                        {group.students
-                                            .filter((s: any) =>
-                                                s.name?.toLowerCase().includes(search.toLowerCase())
-                                            )
-                                            .map((s: any) => s.name)
-                                            .join(", ")}
-                                    </>
-                                )}
-                            </p>
-                        )}
-                    </div>
-                ))}
-            </div>
+            {loading && <p>Loading flex groups…</p>}
+            {error && <p style={{ color: "crimson" }}>{error}</p>}
+
+            {!loading && !error && (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "20px" }}>
+                    {filteredGroups.map(({ group, matchingStudents }) => (
+                        <div
+                            key={group.id}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => setSelectedGroup(group)}
+                            onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") setSelectedGroup(group);
+                            }}
+                            style={{
+                                border: "1px solid #ccc",
+                                borderRadius: "12px",
+                                padding: "20px",
+                                cursor: "pointer",
+                                background: "#f5f5f5",
+                            }}
+                        >
+                            <h3>{group.name}</h3>
+                            <p>Teacher: {group.staff_name}</p>
+                            <p>{group.days.join(", ")} - Period {group.period}</p>
+                            {search && matchingStudents.length > 0 && (
+                                <p style={{ fontSize: "12px", color: "#888" }}>
+                                    Matching students: {matchingStudents.map(s => s.name).join(", ")}
+                                </p>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            )}
 
             {selectedGroup && (
                 <div
+                    onClick={() => setSelectedGroup(null)}
                     style={{
                         position: "fixed",
-                        top: "20%",
-                        left: "30%",
-                        width: "40%",
-                        background: "white",
-                        border: "1px solid black",
-                        borderRadius: "12px",
-                        padding: "25px",
-                        boxShadow: "0 5px 20px #999",
-                        color: "#000000",
+                        inset: 0,
+                        background: "rgba(0,0,0,0.4)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        zIndex: 1000,
                     }}
                 >
-                    <h2 style={{ color: "black" }}>{selectedGroup.name}</h2>
-                    <h3>Teacher</h3>
-                    <p>{selectedGroup.staff_name}</p>
-                    <h3>Students</h3>
-                    <ul>
-                        {selectedGroup.students?.map((student: any) => (
-                            <li key={student.id}>{student.name}</li>
-                        ))}
-                    </ul>
-                    <button onClick={() => setSelectedGroup(null)}>Close</button>
+                    <div
+                        onClick={(e) => e.stopPropagation()}
+                        style={{
+                            width: "40%",
+                            maxWidth: "500px",
+                            background: "white",
+                            border: "1px solid black",
+                            borderRadius: "12px",
+                            padding: "25px",
+                            boxShadow: "0 5px 20px #999",
+                            color: "#000000",
+                        }}
+                    >
+                        <h2 style={{ color: "black" }}>{selectedGroup.name}</h2>
+                        <h3>Teacher</h3>
+                        <p>{selectedGroup.staff_name}</p>
+                        <h3>Students</h3>
+                        <ul>
+                            {selectedGroup.students?.map((student) => (
+                                <li key={student.id}>{student.name}</li>
+                            ))}
+                        </ul>
+                        <button onClick={() => setSelectedGroup(null)}>Close</button>
+                    </div>
                 </div>
             )}
         </div>

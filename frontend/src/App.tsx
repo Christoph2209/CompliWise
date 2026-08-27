@@ -6,6 +6,7 @@ import Students from "./pages/Students";
 import Staff from "./pages/Staff";
 import StudentSchedules from "./pages/StudentSchedules";
 import CompliancePage from "./pages/Compliance";
+import AuditLogPage from "./pages/AuditLog";
 import DashboardRouter from "./pages/DashboardRouter";
 import FlexGroups from "./pages/FlexGroups";
 import Login from "./pages/LoginPage";
@@ -61,6 +62,14 @@ function App() {
                 element={
                   <RoleRoute allowed={["admin", "principal"]}>
                     <CompliancePage />
+                  </RoleRoute>
+                }
+              />
+              <Route
+                path="/audit-log"
+                element={
+                  <RoleRoute allowed={["admin"]}>
+                    <AuditLogPage />
                   </RoleRoute>
                 }
               />

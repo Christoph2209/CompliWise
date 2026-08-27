@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { getSchedule, updateScheduleEntry } from "../api/schedule";
 import { getStaff } from "../api/staff";
 import { useAuth } from "../context/authContext";
+import RunSelector from "../components/RunSelector";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 const PERIODS = [1, 2, 3, 4, 5, 6, 7];
@@ -40,36 +41,56 @@ function isLunchEntry(item: ScheduleEntry) {
 export default function StudentSchedules() {
   const { user } = useAuth();
   const isTeacher = user?.role === "teacher";
+  const canCompareRuns = user?.role === "admin" || user?.role === "principal";
   const myStaffId = user?.staff_member?.id;
 
   const [entries, setEntries] = useState<ScheduleEntry[]>([]);
   const [selectedStudent, setSelectedStudent] = useState<string | null>(null);
   const [editingCell, setEditingCell] = useState<ScheduleEntry | null>(null);
   const [staff, setStaff] = useState<StaffMember[]>([]);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
 
   useEffect(() => {
+    // Teachers always see the current/default run; only admins/principals compare runs
+    if (canCompareRuns && selectedRunId === null) return; // wait for RunSelector to set a default
+
     async function load() {
       const [scheduleData, staffData] = await Promise.all([
-        getSchedule(),
+        getSchedule(canCompareRuns ? selectedRunId! : undefined),
         getStaff(),
       ]);
 
-      // Teachers only ever see entries tied to their own staff_id
-      const visibleEntries =
-        isTeacher && myStaffId
-          ? (scheduleData || []).filter((e: ScheduleEntry) => e.staff_id === myStaffId)
-          : scheduleData || [];
+      const allEntries: ScheduleEntry[] = scheduleData || [];
+
+      let visibleEntries = allEntries;
+
+      if (isTeacher && myStaffId) {
+        // Step 1: find which students belong to this teacher's roster
+        // (any entry where this teacher is the assigned staff)
+        const myStudentIds = new Set(
+          allEntries
+            .filter((e) => e.staff_id === myStaffId)
+            .map((e) => e.student_id)
+        );
+
+        // Step 2: show the FULL schedule for those students,
+        // not just the periods this teacher personally teaches
+        visibleEntries = allEntries.filter((e) => myStudentIds.has(e.student_id));
+      }
 
       setEntries(visibleEntries);
       setStaff(staffData || []);
 
-      if (visibleEntries.length > 0) {
-        setSelectedStudent(visibleEntries[0].student_id);
-      }
+      setSelectedStudent((prev) => {
+        if (prev && visibleEntries.some((e: ScheduleEntry) => e.student_id === prev)) {
+          return prev;
+        }
+        return visibleEntries.length > 0 ? visibleEntries[0].student_id : null;
+      });
     }
 
     load();
-  }, [isTeacher, myStaffId]);
+  }, [isTeacher, myStaffId, canCompareRuns, selectedRunId]);
 
   const students = Array.from(
     new Map(
@@ -109,6 +130,10 @@ export default function StudentSchedules() {
       <h1 style={{ color: "#313131c7" }}>
         {isTeacher ? "My Students' Schedules" : "Student Schedules"}
       </h1>
+
+      {canCompareRuns && (
+        <RunSelector selectedRunId={selectedRunId} onChange={setSelectedRunId} />
+      )}
 
       {isTeacher && students.length === 0 && (
         <p>No students are currently assigned to your schedule.</p>

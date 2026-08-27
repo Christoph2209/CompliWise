@@ -1,63 +1,35 @@
 import { useEffect, useState } from "react";
 import { getSchedule } from "../api/schedule";
 import StudentModal from "../components/StudentModal";
+import RunSelector from "../components/RunSelector";
+import { useAuth } from "../context/authContext";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 const PERIODS = [1, 2, 3, 4, 5, 6, 7];
 
-const CACHE_KEY = "schedule_cache_v1";
-const CACHE_TTL = 1000 * 60 * 5;
-
-
-
 export default function TeacherSchedules() {
+  const { user } = useAuth();
+  const canCompareRuns = user?.role === "admin" || user?.role === "principal";
+
   const [entries, setEntries] = useState<any[]>([]);
   const [selectedTeacher, setSelectedTeacher] = useState("");
   const [selectedSlot, setSelectedSlot] = useState<any>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
 
   useEffect(() => {
+    if (canCompareRuns && selectedRunId === null) return;
+
     async function load() {
-      let data: any[] = [];
-
-      // 1. Cache
-      const cached = localStorage.getItem(CACHE_KEY);
-
-      if (cached) {
-        try {
-          const parsed = JSON.parse(cached);
-
-          if (Date.now() - parsed.timestamp < CACHE_TTL) {
-            data = parsed.data || [];
-          }
-        } catch {
-          console.log("Cache parse failed");
-        }
-      }
-
-      // 2. Always refresh
-      const fresh = (await getSchedule()) || [];
-      data = fresh;
-
+      const data = (await getSchedule(canCompareRuns ? selectedRunId! : undefined)) || [];
       setEntries(data);
 
-      // 3. Set default teacher ONCE from fresh data
       if (data.length > 0) {
         setSelectedTeacher((prev) => prev || data[0].staff_id);
       }
-
-      // 4. Cache update
-      localStorage.setItem(
-        CACHE_KEY,
-        JSON.stringify({
-          timestamp: Date.now(),
-          data,
-        })
-      );
     }
 
     load();
-  }, []);
-
+  }, [canCompareRuns, selectedRunId]);
   // Build staff list
  const staff = Array.from(
   new Map(
@@ -95,6 +67,9 @@ function getStudentCount(day: string, period: number) {
     <div style={{ padding: "20px", fontFamily: "Arial, sans-serif" }}>
       <h1 style={{ marginBottom: "16px", color: "#000000" }}>Staff Schedules</h1>
 
+      {canCompareRuns && (
+        <RunSelector selectedRunId={selectedRunId} onChange={setSelectedRunId} />
+      )}
       {/* Staff Selector */}
       <div style={{ marginBottom: "20px" }}>
         <label style={{ marginRight: "10px", fontWeight: "bold" }}>

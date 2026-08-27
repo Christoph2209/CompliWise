@@ -23,7 +23,7 @@ export default function Staff() {
 
   return (
     <div className="staff-page">
-      <h1>Staff</h1>
+      <h1 style={{ color: "#070707" }}>Staff</h1>
 
       <input
         className="staff-search"
