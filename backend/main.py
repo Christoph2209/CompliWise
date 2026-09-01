@@ -10,13 +10,14 @@ import shutil
 import tempfile
 
 from pathlib import Path
-from fastapi import File, UploadFile
+from fastapi import File, UploadFile, Request
 from import_csv_data import import_students, import_staff
 from uuid import UUID
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from dotenv import load_dotenv
 from auth_utils import hash_password, verify_password
@@ -41,8 +42,10 @@ from dmscheduler_db import (
     SessionLocal,
     School,
     StaffMember,
+    ScheduleRun,
     Student,
     User,
+    AuditLog,
 )
 from datetime import datetime, timezone
 from scheduler import DAYS, schedule_iep_services_first
@@ -177,21 +180,76 @@ def root():
         ],
     }
 
+def _jsonable(data: dict) -> dict:
+    """Coerces UUID/datetime values so a dict can be stored in a JSONB column."""
+    result = {}
+    for key, value in data.items():
+        if isinstance(value, uuid.UUID):
+            result[key] = str(value)
+        elif isinstance(value, datetime):
+            result[key] = value.isoformat()
+        else:
+            result[key] = value
+    return result
 
+
+def write_audit_log(
+    db: Session,
+    *,
+    action: str,
+    school_id=None,
+    user_id=None,
+    entity_type: str | None = None,
+    entity_id=None,
+    before: dict | None = None,
+    after: dict | None = None,
+    ip_address: str | None = None,
+):
+    """Writes one audit row. Deliberately never raises -- a broken audit
+    write should never block the underlying action or roll back its commit."""
+    try:
+        db.add(AuditLog(
+            school_id=school_id,
+            user_id=user_id,
+            action=action,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            before_json=before,
+            after_json=after,
+            ip_address=ip_address,
+        ))
+        db.commit()
+    except Exception:
+        db.rollback()
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
 
 @app.post("/login")
-def login(data: LoginRequest, db: Session = Depends(get_db)):
+def login(data: LoginRequest, request: Request, db: Session = Depends(get_db)):
     global CURRENT_USER
 
     user = db.query(User).filter(User.email == data.email).first()
 
     if not user or not verify_password(data.password, user.password_hash):
+        write_audit_log(
+            db,
+            action="Login Failed",
+            school_id=user.school_id if user else None,
+            user_id=user.id if user else None,
+            ip_address=request.client.host if request.client else None,
+        )
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     CURRENT_USER = user.id
+
+    write_audit_log(
+        db,
+        action="Login Success",
+        school_id=user.school_id,
+        user_id=user.id,
+        ip_address=request.client.host if request.client else None,
+    )
 
     return {
         "user_id": str(user.id),
@@ -584,20 +642,25 @@ def my_schedule(user: User = Depends(get_current_user), db: Session = Depends(ge
 # ---------------------------------------------------------------------------
 
 @app.get("/schedule")
-def list_schedule_entries():
+def list_schedule_entries(run_id: str | None = None):
     db = SessionLocal()
 
     try:
-        results = (
+        query = (
             db.query(ScheduleEntry, Student, StaffMember)
             .join(Student, ScheduleEntry.student_id == Student.id)
             .outerjoin(StaffMember, ScheduleEntry.staff_id == StaffMember.id)
-            .all()
+
         )
+        if run_id:
+            query = query.filter(ScheduleEntry.run_id == run_id)
+
+        results = query.all()
 
         return [
             {
                 "id": str(entry.id),
+                "run_id": str(entry.run_id),
                 "student_id": str(student.id),
                 "student_name": f"{student.first_name} {student.last_name}",
                 "grade": student.grade,
@@ -612,20 +675,26 @@ def list_schedule_entries():
             }
             for entry, student, staff in results
         ]
-
     finally:
         db.close()
 
 
 @app.put("/schedule/{entry_id}")
-def update_schedule_entry(entry_id: str, payload: dict):
+def update_schedule_entry(
+    entry_id: str,
+    payload: dict,
+    request: Request,
+    user: User = Depends(get_current_user),
+):
     db = SessionLocal()
-
     try:
         entry = db.query(ScheduleEntry).filter(ScheduleEntry.id == entry_id).first()
-
         if not entry:
             raise HTTPException(status_code=404, detail="Not found")
+
+        before = _jsonable({
+            key: getattr(entry, key) for key in payload.keys() if hasattr(entry, key)
+        })
 
         for key, value in payload.items():
             setattr(entry, key, value)
@@ -633,8 +702,20 @@ def update_schedule_entry(entry_id: str, payload: dict):
         db.commit()
         db.refresh(entry)
 
-        return {"success": True, "id": str(entry.id)}
+        write_audit_log(
+            db,
+            action="Update Schedule Entry",
+            school_id=user.school_id,
+            user_id=user.id,
+            entity_type="ScheduleEntry",
+            entity_id=entry.id,
+            before=before,
+            after=_jsonable(payload),
+            ip_address=request.client.host if request.client else None,
+        )
 
+        return {"success": True, "id": str(entry.id)}
+    
     finally:
         db.close()
 
@@ -663,6 +744,108 @@ def preview_priority():
     except (DBConfigError, DBAPIError) as error:
         raise HTTPException(status_code=500, detail=str(error))
 
+@app.get("/schedule-runs")
+def list_schedule_runs(user: User = Depends(get_current_user)):
+    if user.role not in ("admin", "principal"):
+        raise HTTPException(status_code=403, detail="Not allowed")
+
+    db = SessionLocal()
+    try:
+        runs = db.query(ScheduleRun).order_by(ScheduleRun.created_at.desc()).all()
+        run_ids = [r.id for r in runs]
+
+        entry_counts = dict(
+            db.query(ScheduleEntry.run_id, func.count(ScheduleEntry.id))
+            .filter(ScheduleEntry.run_id.in_(run_ids))
+            .group_by(ScheduleEntry.run_id)
+            .all()
+        )
+
+        critical_flag_counts = dict(
+            db.query(ComplianceFlag.run_id, func.count(ComplianceFlag.id))
+            .filter(
+                ComplianceFlag.run_id.in_(run_ids),
+                ComplianceFlag.severity == "critical",
+                ComplianceFlag.status == "open",
+            )
+            .group_by(ComplianceFlag.run_id)
+            .all()
+        )
+
+        return [
+            {
+                "id": str(r.id),
+                "name": r.name,
+                "school_year": r.school_year,
+                "status": r.status,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "published_at": r.published_at.isoformat() if r.published_at else None,
+                "summary": r.summary_json,
+                "entry_count": entry_counts.get(r.id, 0),
+                "open_critical_flags": critical_flag_counts.get(r.id, 0),
+            }
+            for r in runs
+        ]
+    finally:
+        db.close()
+
+@app.get("/schedule-runs/{run_id}")
+def get_schedule_run(run_id: str, user: User = Depends(get_current_user)):
+    if user.role not in ("admin", "principal"):
+        raise HTTPException(status_code=403, detail="Not allowed")
+
+    db = SessionLocal()
+    try:
+        run = db.query(ScheduleRun).filter(ScheduleRun.id == run_id).first()
+        if not run:
+            raise HTTPException(status_code=404, detail="Schedule run not found")
+
+        entries = (
+            db.query(ScheduleEntry, Student, StaffMember)
+            .join(Student, ScheduleEntry.student_id == Student.id)
+            .outerjoin(StaffMember, ScheduleEntry.staff_id == StaffMember.id)
+            .filter(ScheduleEntry.run_id == run_id)
+            .all()
+        )
+
+        flags = db.query(ComplianceFlag).filter(ComplianceFlag.run_id == run_id).all()
+
+        return {
+            "id": str(run.id),
+            "name": run.name,
+            "status": run.status,
+            "created_at": run.created_at.isoformat() if run.created_at else None,
+            "summary": run.summary_json,
+            "entries": [
+                {
+                    "id": str(entry.id),
+                    "student_id": str(student.id),
+                    "student_name": f"{student.first_name} {student.last_name}",
+                    "grade": student.grade,
+                    "staff_id": str(staff.id) if staff else None,
+                    "staff_name": (f"{staff.first_name} {staff.last_name}" if staff else entry.teacher_name),
+                    "day_of_week": entry.day_of_week,
+                    "period": entry.period,
+                    "subject": entry.subject,
+                    "service_type": entry.service_type,
+                    "is_pullout": entry.is_pullout,
+                    "is_flex_period": entry.is_flex_period,
+                }
+                for entry, student, staff in entries
+            ],
+            "compliance_flags": [
+                {
+                    "id": str(f.id),
+                    "flag_type": f.flag_type,
+                    "severity": f.severity,
+                    "title": f.title,
+                    "status": f.status,
+                }
+                for f in flags
+            ],
+        }
+    finally:
+        db.close()
 
 @app.post("/save-schedule")
 def save_schedule(config: ScheduleGenerationConfig):
@@ -746,7 +929,7 @@ def reset_generated_schedules():
     except (DBConfigError, DBAPIError) as error:
         raise HTTPException(status_code=500, detail=str(error))
 
-def _run_schedule_job(job_id: str, config: ScheduleGenerationConfig):
+def _run_schedule_job(job_id: str, config: ScheduleGenerationConfig, user_id=None, school_id=None):
     def progress(stage_index: int, message: str | None = None):
         SCHEDULE_JOBS[job_id].update({
             "current_stage": stage_index,
@@ -786,7 +969,7 @@ def _run_schedule_job(job_id: str, config: ScheduleGenerationConfig):
             },
         )
 
-        progress(6, "Saving schedule to database")        
+        progress(6, "Saving schedule to database")
         create_schedule_entries(schedule_entries, run_id=schedule_run_id)
         create_compliance_flags(compliance_flags, run_id=schedule_run_id)
         create_flex_groups(flex_groups, run_id=schedule_run_id)
@@ -807,6 +990,23 @@ def _run_schedule_job(job_id: str, config: ScheduleGenerationConfig):
                 "schedule_run_id": schedule_run_id,
             },
         })
+        db = SessionLocal()
+        try:
+            write_audit_log(
+                db,
+                action="Genereate schedule completed",
+                school_id=school_id,
+                user_id=user_id,
+                entity_type="ScheduleRun",
+                entity_id=schedule_run_id,
+                after={
+                    "schedule_entries": len(schedule_entries),
+                    "compliance_flags": len(compliance_flags),
+                    "critical_flags": len(critical_flags),
+                },
+            )
+        finally:
+            db.close()
 
     except (DBConfigError, DBAPIError) as error:
         SCHEDULE_JOBS[job_id].update({"status": "error", "error": str(error)})
@@ -817,19 +1017,34 @@ def _run_schedule_job(job_id: str, config: ScheduleGenerationConfig):
 @app.post("/schedule/generate/start")
 def start_schedule_generation(
     config: ScheduleGenerationConfig,
+    request: Request,
     user: User = Depends(get_current_user),
 ):
     job_id = str(uuid.uuid4())
     SCHEDULE_JOBS[job_id] = {
-        "status": "queued",
-        "current_stage": -1,
-        "stage_name": None,
-        "percent": 0,
-        "result": None,
-        "error": None,
+        "status": "queued", "current_stage": -1, "stage_name": None,
+        "percent": 0, "result": None, "error": None,
     }
 
-    thread = threading.Thread(target=_run_schedule_job, args=(job_id, config), daemon=True)
+    db = SessionLocal()
+    try:
+        write_audit_log(
+            db,
+            action="Generate Schedule Start",
+            school_id=user.school_id,
+            user_id=user.id,
+            entity_type="ScheduleRun",
+            after={"job_id": job_id},
+            ip_address=request.client.host if request.client else None,
+        )
+    finally:
+        db.close()
+
+    thread = threading.Thread(
+        target=_run_schedule_job,
+        args=(job_id, config, user.id, user.school_id),
+        daemon=True,
+    )
     thread.start()
 
     return {"job_id": job_id}
@@ -980,25 +1195,40 @@ def run_compliance_check(user: User = Depends(get_current_user)):
     
 
 @app.patch("/compliance-flags/{flag_id}/resolve")
-def resolve_compliance_flag(flag_id: UUID):
+def resolve_compliance_flag(
+    flag_id: UUID,
+    request: Request,
+    user: User = Depends(get_current_user),
+):
     db = SessionLocal()
-
     try:
         flag = db.query(ComplianceFlag).filter(ComplianceFlag.id == flag_id).first()
         if not flag:
             raise HTTPException(status_code=404, detail="Compliance flag not found")
 
+        before_status = flag.status
         flag.status = "resolved"
         flag.resolved_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(flag)
+
+        write_audit_log(
+            db,
+            action="Resolve Compliance Flag",
+            school_id=user.school_id,
+            user_id=user.id,
+            entity_type="ComplianceFlag",
+            entity_id=flag.id,
+            before={"status": before_status},
+            after={"status": flag.status, "resolved_at": flag.resolved_at.isoformat()},
+            ip_address=request.client.host if request.client else None,
+        )
 
         return {
             "id": str(flag.id),
             "status": flag.status,
             "resolved_at": flag.resolved_at.isoformat() if flag.resolved_at else None,
         }
-
     finally:
         db.close()
 # ---------------------------------------------------------------------------
@@ -1032,5 +1262,52 @@ def list_flex_groups():
             for fg, s in rows
         ]
 
+    finally:
+        db.close()
+# ---------------------------------------------------------------------------
+# AUDIT LOG
+# ---------------------------------------------------------------------------
+
+@app.get("/audit-logs")
+def list_audit_logs(
+    action: str | None = None,
+    entity_type: str | None = None,
+    limit: int = 100,
+    user: User = Depends(get_current_user),
+):
+    if user.role not in ("admin"):
+        raise HTTPException(status_code=403, detail="Not allowed")
+
+    db = SessionLocal()
+    try:
+        query = db.query(AuditLog, User).outerjoin(User, User.id == AuditLog.user_id)
+
+        if action:
+            query = query.filter(AuditLog.action == action)
+        if entity_type:
+            query = query.filter(AuditLog.entity_type == entity_type)
+
+        rows = (
+            query.order_by(AuditLog.created_at.desc())
+            .limit(min(limit, 500))
+            .all()
+        )
+
+        return [
+            {
+                "id": str(log.id),
+                "action": log.action,
+                "entity_type": log.entity_type,
+                "entity_id": str(log.entity_id) if log.entity_id else None,
+                "user_id": str(log.user_id) if log.user_id else None,
+                "user_email": u.email if u else None,
+                "user_name": u.full_name if u else None,
+                "before_json": log.before_json,
+                "after_json": log.after_json,
+                "ip_address": log.ip_address,
+                "created_at": log.created_at.isoformat() if log.created_at else None,
+            }
+            for log, u in rows
+        ]
     finally:
         db.close()

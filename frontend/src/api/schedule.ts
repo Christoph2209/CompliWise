@@ -1,9 +1,11 @@
 import type { ScheduleGenerationConfig } from "../components/GenerateScheduleModal";
 import { api } from "./clients";
 
-export async function getSchedule() {
-  const { data } = await api.get("/schedule");
-  return data;
+export async function getSchedule(runId?: string) {
+  const res = await api.get("/schedule", {
+    params: runId ? { run_id: runId } : {},
+  });
+  return res.data;
 }
 
 export async function getMySchedule() {
@@ -16,9 +18,9 @@ export async function resetSchedule() {
   return data;
 }
 
-export async function updateScheduleEntry(id: string, payload: any) {
-  const { data } = await api.put(`/schedule/${id}`, payload);
-  return data;
+export async function updateScheduleEntry(entryId: string, payload: any) {
+  const res = await api.put(`/schedule/${entryId}`, payload);
+  return res.data;
 }
 
 export interface ScheduleJobStatus {

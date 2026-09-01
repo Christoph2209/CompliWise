@@ -268,11 +268,11 @@ class PeriodConfig:
 # ---------------------------------------------------------------
 # hard limits on pullouts
 # ---------------------------------------------------------------
-MAX_PULLOUTS_PER_DAY = 3
+MAX_PULLOUTS_PER_DAY = 2
 MAX_SAME_SERVICE_PER_DAY = 2
 
 MAX_SAME_SERVICE_PER_DAY_OVERRIDES = {
-    "ENL": 3,
+    "ENL": 2,
 }
 
 
