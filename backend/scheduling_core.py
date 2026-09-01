@@ -115,7 +115,7 @@ DEFAULT_SPECIALS_SESSIONS_PER_WEEK = {
 
 # Whole-classroom class, sized like a gen-ed homeroom class but with
 # headroom for two homerooms to combine into one session.
-MAX_GEN_ED_CLASS_SIZE = 30
+MAX_GEN_ED_CLASS_SIZE = 32
 MAX_SPECIALS_CLASS_SIZE = MAX_GEN_ED_CLASS_SIZE * 2
 
 
@@ -268,11 +268,11 @@ class PeriodConfig:
 # ---------------------------------------------------------------
 # hard limits on pullouts
 # ---------------------------------------------------------------
-MAX_PULLOUTS_PER_DAY = 3
+MAX_PULLOUTS_PER_DAY = 2
 MAX_SAME_SERVICE_PER_DAY = 2
 
 MAX_SAME_SERVICE_PER_DAY_OVERRIDES = {
-    "ENL": 3,
+    "ENL": 2,
 }
 
 

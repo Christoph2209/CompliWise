@@ -27,6 +27,7 @@
 }
 
 .modal-header h2 {
+  color:rgba(0, 0, 0, 0.2);
   margin: 0;
   font-size: 1.1rem;
 }

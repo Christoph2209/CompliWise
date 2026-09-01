@@ -41,18 +41,17 @@ interface GenerateScheduleModalProps {
 // Reasonable K-5 bell schedule starting point; fully editable by the user.
 
 const DEFAULT_PERIODS: PeriodDefinition[] = [
-  { id: "p1", name: "Period 1", start_time: "08:30", end_time: "09:15" },
-  { id: "p2", name: "Period 2", start_time: "09:15", end_time: "10:00" },
-  { id: "p3", name: "Period 3", start_time: "10:00", end_time: "10:45" },
-  { id: "p4", name: "Period 4", start_time: "10:45", end_time: "11:30" },
-  { id: "lunch", name: "Lunch", start_time: "11:30", end_time: "12:15", is_lunch: true },
-  { id: "p5", name: "Period 5", start_time: "12:15", end_time: "13:00" },
-  { id: "p6", name: "Period 6", start_time: "13:00", end_time: "13:45" },
-  { id: "p7", name: "Period 7", start_time: "13:45", end_time: "14:30" },
+  { id: "p1", name: "Period 1", start_time: "08:10", end_time: "08:55" },
+  { id: "p2", name: "Period 2", start_time: "09:00", end_time: "09:45" },
+  { id: "p3", name: "Period 3", start_time: "09:50", end_time: "10:35" },
+  { id: "p4", name: "Period 4", start_time: "10:40", end_time: "11:30", is_lunch: true },
+  { id: "p5", name: "Period 5", start_time: "11:35", end_time: "12:25", is_lunch: true },
+  { id: "p6", name: "Period 6", start_time: "12:30", end_time: "13:20", is_lunch: true },
+  { id: "p7", name: "Period 7", start_time: "13:25", end_time: "14:10" },
 ];
 
 const DEFAULT_SPECIALS: SpecialsRequirement[] = [
-  { id: "sp1", subject: "PE", sessions_per_week: 3, session_length_minutes: 45 },
+  { id: "sp1", subject: "PE", sessions_per_week: 2, session_length_minutes: 45 },
   { id: "sp2", subject: "Music", sessions_per_week: 2, session_length_minutes: 45 },
   { id: "sp3", subject: "Art", sessions_per_week: 1, session_length_minutes: 45 },
 ];
