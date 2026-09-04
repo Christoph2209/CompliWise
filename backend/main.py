@@ -44,6 +44,7 @@ from dmscheduler_db import (
     StaffMember,
     ScheduleRun,
     Student,
+    StudentService,
     User,
     AuditLog,
 )
@@ -221,6 +222,7 @@ def write_audit_log(
         db.commit()
     except Exception:
         db.rollback()
+
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
@@ -536,6 +538,222 @@ def get_my_students(user: User = Depends(get_current_user), db: Session = Depend
         key=lambda c: (DAYS.index(c["day_of_week"]), c["period"]),
     )
 
+
+# ---------------------------------------------------------------------------
+# Pydantic models — Student Services
+# ---------------------------------------------------------------------------
+
+class StudentServiceCreate(BaseModel):
+    service_type: str
+    subject_area: str | None = None
+    minutes_per_week: int
+    sessions_per_week: int | None = None
+    is_pullout: bool = True
+    preferred_provider_id: str | None = None
+    notes: str | None = None
+
+class StudentServiceUpdate(BaseModel):
+    service_type: str | None = None
+    subject_area: str | None = None
+    minutes_per_week: int | None = None
+    sessions_per_week: int | None = None
+    is_pullout: bool | None = None
+    preferred_provider_id: str | None = None
+    notes: str | None = None
+
+ALLOWED_SERVICE_FIELDS = {
+    "service_type", "subject_area", "minutes_per_week",
+    "sessions_per_week", "is_pullout", "preferred_provider_id", "notes",
+}
+
+
+# ---------------------------------------------------------------------------
+# Student Services
+# ---------------------------------------------------------------------------
+
+@app.post("/students/{student_id}/services")
+def create_student_service(
+    student_id: str,
+    payload: StudentServiceCreate,
+    request: Request,
+    user: User = Depends(get_current_user),
+):
+    db = SessionLocal()
+    try:
+        student = db.query(Student).filter(Student.id == student_id).first()
+        if not student:
+            raise HTTPException(status_code=404, detail="Student not found")
+
+        if payload.preferred_provider_id:
+            provider = db.query(StaffMember).filter(
+                StaffMember.id == payload.preferred_provider_id
+            ).first()
+            if not provider:
+                raise HTTPException(status_code=404, detail="Preferred provider not found")
+
+        service = StudentService(
+            school_id=student.school_id,
+            student_id=student.id,
+            service_type=payload.service_type,
+            subject_area=payload.subject_area,
+            minutes_per_week=payload.minutes_per_week,
+            sessions_per_week=payload.sessions_per_week,
+            is_pullout=payload.is_pullout,
+            preferred_provider_id=payload.preferred_provider_id,
+            notes=payload.notes,
+        )
+        db.add(service)
+        db.commit()
+        db.refresh(service)
+
+        write_audit_log(
+            db,
+            action="Create Student Service",
+            school_id=user.school_id,
+            user_id=user.id,
+            entity_type="StudentService",
+            entity_id=service.id,
+            after=_jsonable({
+                "student_id": str(student.id),
+                "service_type": service.service_type,
+                "minutes_per_week": service.minutes_per_week,
+            }),
+            ip_address=request.client.host if request.client else None,
+        )
+
+        return {
+            "id": str(service.id),
+            "student_id": str(service.student_id),
+            "service_type": service.service_type,
+            "subject_area": service.subject_area,
+            "minutes_per_week": service.minutes_per_week,
+            "sessions_per_week": service.sessions_per_week,
+            "is_pullout": service.is_pullout,
+            "preferred_provider_id": str(service.preferred_provider_id) if service.preferred_provider_id else None,
+            "notes": service.notes,
+        }
+    finally:
+        db.close()
+
+
+@app.get("/students/{student_id}/services")
+def list_student_services(student_id: str, user: User = Depends(get_current_user)):
+    db = SessionLocal()
+    try:
+        student = db.query(Student).filter(Student.id == student_id).first()
+        if not student:
+            raise HTTPException(status_code=404, detail="Student not found")
+
+        services = (
+            db.query(StudentService)
+            .filter(StudentService.student_id == student_id)
+            .order_by(StudentService.service_type)
+            .all()
+        )
+
+        return [
+            {
+                "id": str(s.id),
+                "service_type": s.service_type,
+                "subject_area": s.subject_area,
+                "minutes_per_week": s.minutes_per_week,
+                "sessions_per_week": s.sessions_per_week,
+                "is_pullout": s.is_pullout,
+                "preferred_provider_id": str(s.preferred_provider_id) if s.preferred_provider_id else None,
+                "notes": s.notes,
+            }
+            for s in services
+        ]
+    finally:
+        db.close()
+
+
+@app.put("/students/{student_id}/services/{service_id}")
+def update_student_service(
+    student_id: str,
+    service_id: str,
+    payload: StudentServiceUpdate,
+    request: Request,
+    user: User = Depends(get_current_user),
+):
+    db = SessionLocal()
+    try:
+        service = (
+            db.query(StudentService)
+            .filter(StudentService.id == service_id, StudentService.student_id == student_id)
+            .first()
+        )
+        if not service:
+            raise HTTPException(status_code=404, detail="Service not found")
+
+        update_data = payload.dict(exclude_unset=True)
+        before = _jsonable({
+            field: getattr(service, field) for field in update_data if field in ALLOWED_SERVICE_FIELDS
+        })
+
+        for field, value in update_data.items():
+            if field in ALLOWED_SERVICE_FIELDS:
+                setattr(service, field, value)
+
+        db.commit()
+        db.refresh(service)
+
+        write_audit_log(
+            db,
+            action="Update Student Service",
+            school_id=user.school_id,
+            user_id=user.id,
+            entity_type="StudentService",
+            entity_id=service.id,
+            before=before,
+            after=_jsonable(update_data),
+            ip_address=request.client.host if request.client else None,
+        )
+
+        return {"success": True, "id": str(service.id)}
+    finally:
+        db.close()
+
+
+@app.delete("/students/{student_id}/services/{service_id}")
+def delete_student_service(
+    student_id: str,
+    service_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+):
+    db = SessionLocal()
+    try:
+        service = (
+            db.query(StudentService)
+            .filter(StudentService.id == service_id, StudentService.student_id == student_id)
+            .first()
+        )
+        if not service:
+            raise HTTPException(status_code=404, detail="Service not found")
+
+        before = _jsonable({
+            "service_type": service.service_type,
+            "minutes_per_week": service.minutes_per_week,
+        })
+
+        db.delete(service)
+        db.commit()
+
+        write_audit_log(
+            db,
+            action="Delete Student Service",
+            school_id=user.school_id,
+            user_id=user.id,
+            entity_type="StudentService",
+            entity_id=service.id,
+            before=before,
+            ip_address=request.client.host if request.client else None,
+        )
+
+        return {"status": "deleted", "id": service_id}
+    finally:
+        db.close()
 
 # ---------------------------------------------------------------------------
 # Staff

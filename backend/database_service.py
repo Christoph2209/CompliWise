@@ -8,6 +8,7 @@ from dmscheduler_db import (
     School,
     Student,
     StaffMember,
+    StudentService,
     ScheduleRun,
     ScheduleEntry,
     ComplianceFlag,
@@ -42,6 +43,7 @@ def get_default_school(db):
 
 
 
+
 def get_students(
     active_only: bool = False,
     search: str | None = None,
@@ -53,37 +55,39 @@ def get_students(
     db = SessionLocal()
 
     try:
-
         query = db.query(Student)
-
 
         if search:
             query = query.filter(
                 (Student.first_name.ilike(f"%{search}%")) |
                 (Student.last_name.ilike(f"%{search}%"))
             )
-
-
         if grade:
-            query = query.filter(
-                Student.grade == grade
-            )
-
-
+            query = query.filter(Student.grade == grade)
         if iep is not None:
-            query = query.filter(
-                Student.has_iep == iep
-            )
-
-
+            query = query.filter(Student.has_iep == iep)
         if mtss_tier:
-            query = query.filter(
-                Student.mtss_tier == mtss_tier
-            )
-
+            query = query.filter(Student.mtss_tier == mtss_tier)
 
         students = query.all()
+        student_ids = [s.id for s in students]
 
+        # Pull every StudentService row for these students in one query
+        # and group by student_id, rather than N+1 querying per student.
+        services_by_student: dict = {}
+        if student_ids:
+            service_rows = (
+                db.query(StudentService)
+                .filter(StudentService.student_id.in_(student_ids))
+                .all()
+            )
+            for svc in service_rows:
+                services_by_student.setdefault(svc.student_id, []).append({
+                    "subject": svc.subject_area or svc.service_type,
+                    "service_type": svc.service_type,
+                    "minutes": svc.minutes_per_week,
+                    "is_pullout": svc.is_pullout,
+                })
 
         return [
             {
@@ -98,6 +102,8 @@ def get_students(
                 "enl_minutes_required": student.enl_minutes_required,
                 "mtss_tier": student.mtss_tier,
                 "status": "active",
+                "services": services_by_student.get(student.id, []),
+                "iep_services": services_by_student.get(student.id, []),
             }
             for student in students
         ]
@@ -565,3 +571,51 @@ def delete_entity_many(entity_name: str, query: dict):
 
     finally:
         db.close()
+
+def get_student_services(student: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Mandated, individually-scheduled services only.
+
+    NOTE: FLEX for MTSS tier_2/tier_3 students is intentionally NOT
+    generated here. It's handled entirely by build_flex_groups() /
+    apply_flex_groups_to_schedule() in scheduler.py. Do not re-add a
+    FLEX block here.
+    """
+    services = []
+
+    db_services = student.get("services")
+
+    if db_services:
+        for service in db_services:
+            services.append({
+                "subject": service.get("subject") or service.get("service_type") or "IEP Support",
+                "service_type": service.get("service_type") or "SETSS",
+                "minutes": int(service.get("minutes") or 30),
+                "is_pullout": bool(service.get("is_pullout", True)),
+            })
+    elif student.get("has_iep"):
+        # IEP-flagged but no StudentService rows on file -- fall back
+        # to a generic placeholder so the student still gets SOME
+        # mandated-support slot, rather than silently getting nothing.
+        # This should shrink toward zero as real service data is
+        # entered/imported; a student hitting this branch is a sign
+        # their services still need to be entered.
+        services.append({
+            "subject": "IEP Support",
+            "service_type": "SETSS",
+            "minutes": 30,
+            "is_pullout": True
+        })
+
+    # ENL is a mandated, individually-scheduled pullout service and
+    # must remain here regardless of anything done to the block above.
+    enl_minutes = int(student.get("enl_minutes_required") or 0)
+    if enl_minutes > 0:
+        services.append({
+            "subject": "ENL",
+            "service_type": "ENL",
+            "minutes": enl_minutes,
+            "is_pullout": True
+        })
+
+    return services
