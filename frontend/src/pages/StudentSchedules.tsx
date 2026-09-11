@@ -5,7 +5,7 @@ import { useAuth } from "../context/authContext";
 import RunSelector from "../components/RunSelector";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
-const PERIODS = [1, 2, 3, 4, 5, 6, 7];
+
 const SPECIALS_SUBJECTS = ["PE", "Music", "Art"];
 
 interface StaffMember {
@@ -108,7 +108,9 @@ export default function StudentSchedules() {
   const studentSchedule = entries.filter(
     (e) => e.student_id === selectedStudent
   );
-
+  const periods = Array.from(
+    new Set(entries.map((e) => Number(e.period)))
+  ).sort((a, b) => a - b);
   function getClass(day: string, period: number) {
     return studentSchedule.find(
       (e) => e.day_of_week === day && Number(e.period) === period
@@ -164,7 +166,7 @@ export default function StudentSchedules() {
         </thead>
 
         <tbody>
-          {PERIODS.map((period) => (
+          {periods.map((period) => (
             <tr key={period}>
               <td>{period}</td>
 

@@ -11,7 +11,7 @@ import tempfile
 
 from pathlib import Path
 from fastapi import File, UploadFile, Request
-from import_csv_data import import_students, import_staff
+from import_csv_data import import_student_services, import_students, import_staff
 from uuid import UUID
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -148,6 +148,7 @@ class CreateUserRequest(BaseModel):
 
 class ScheduleGenerationConfig(BaseModel):
     periods: list[dict[str, Any]]
+    grade_groups: list[dict[str, Any]]          # NEW — required
     pullout_constraints: dict[str, Any]
     specials_requirements: list[dict[str, Any]]
     
@@ -320,6 +321,8 @@ def setup_import_csv(
                 shutil.copyfileobj(students_file.file, f)
             result["students_imported"] = import_students(db, school, csv_path=students_path)
 
+            service_result = import_student_services(db, school, csv_path=students_path)
+            result["services_imported"] = service_result["services_created"]
         if staff_file is not None:
             staff_path = Path(tmpdir) / "staff.csv"
             with staff_path.open("wb") as f:
@@ -1065,9 +1068,14 @@ def get_schedule_run(run_id: str, user: User = Depends(get_current_user)):
     finally:
         db.close()
 
+
 @app.post("/save-schedule")
 def save_schedule(config: ScheduleGenerationConfig):
-    """Generate schedules and store them in the scheduler database."""
+    try:
+        period_config = PeriodConfig.from_config(config)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
     try:
         students = get_students()
         staff = get_staff()
@@ -1077,9 +1085,7 @@ def save_schedule(config: ScheduleGenerationConfig):
             students=students,
             staff_members=staff,
             school_year=school_year,
-            # TODO: config.periods / config.pullout_constraints /
-            # config.specials_requirements are accepted from the frontend
-            # but not yet wired into the scheduler — see PeriodConfig.
+            period_config=period_config,
         )
 
         schedule_entries = result["schedule_entries"]
@@ -1158,7 +1164,18 @@ def _run_schedule_job(job_id: str, config: ScheduleGenerationConfig, user_id=Non
 
     try:
         SCHEDULE_JOBS[job_id]["status"] = "running"
+        try:
+            period_config = PeriodConfig.from_config(config)
+        except ValueError as error:
+            SCHEDULE_JOBS[job_id].update({"status": "error", "error": str(error)})
+            return
 
+        print(f"[schedule job {job_id}] period_config: periods={period_config.periods} "
+              f"group_periods={period_config.group_periods} "
+              f"blackout={period_config.blackout_periods} "
+              f"min_gap={period_config.min_gap_minutes} "
+              f"max_pullouts={period_config.max_pullouts_per_day}")
+        
         students = get_students()
         staff = get_staff()
         school_year = os.getenv("SCHOOL_YEAR", "2026-2027")
@@ -1167,6 +1184,7 @@ def _run_schedule_job(job_id: str, config: ScheduleGenerationConfig, user_id=Non
             students=students,
             staff_members=staff,
             school_year=school_year,
+            period_config=period_config,
             progress_callback=progress,  # see note below — needs threading into scheduler.py
         )
         schedule_entries = result["schedule_entries"]
