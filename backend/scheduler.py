@@ -10,7 +10,7 @@ mandated pullout services, and fills in remaining general-ed periods.
 """
 
 from typing import Any, Dict, List, Optional, Set, Tuple
-
+import math
 from scheduling_core import (
     DAYS,
     PeriodConfig,
@@ -43,6 +43,7 @@ class ScheduleIndex:
         self.class_rosters = {}
         self.student_services_by_day = set()
         self.pullouts_by_student_day = {}
+        self.pullout_periods_by_student_day = {}   # NEW
         self.service_count_by_student_day = {}
         self.service_days_by_student = {}
         self.teacher_slot_subjects = {}
@@ -116,8 +117,14 @@ class ScheduleIndex:
     def pullouts_already_on_day(self, student_id, day):
         return self.pullouts_by_student_day.get((student_id, day), 0)
 
-    def pullout_limit_reached(self, student_id, day):
-        return self.pullouts_already_on_day(student_id, day) >= MAX_PULLOUTS_PER_DAY
+    def pullout_limit_reached(self, student_id, day, period_config=None):
+        limit = (
+            period_config.max_pullouts_per_day
+            if period_config is not None
+            else MAX_PULLOUTS_PER_DAY
+        )
+        return self.pullouts_already_on_day(student_id, day) >= limit
+
 
     def same_service_limit_reached(self, student_id, service_type, day):
         limit = max_same_service_per_day(service_type)
@@ -127,7 +134,15 @@ class ScheduleIndex:
             (student_id, service_type, day), 0
         )
         return count >= limit
-
+    def violates_min_gap(self, student_id, day, period, period_config=None):
+        min_gap = getattr(period_config, "min_gap_minutes", 0) if period_config else 0
+        if min_gap <= 0:
+            return False
+        for other_period in self.pullout_periods_by_student_day.get((student_id, day), []):
+            if period_config.gap_between_periods_minutes(period, other_period) < min_gap:
+                return True
+        return False
+    
     def violates_min_day_gap(self, student_id, service_type, day):
         if MIN_DAYS_BETWEEN_SAME_SERVICE <= 0:
             return False
@@ -182,9 +197,10 @@ class ScheduleIndex:
                 self.service_days_by_student[key] = set()
             self.service_days_by_student[key].add(day)
 
-        if is_pullout:
-            key = (student_id, day)
-            self.pullouts_by_student_day[key] = self.pullouts_by_student_day.get(key, 0) + 1
+            if is_pullout:
+                key = (student_id, day)
+                self.pullouts_by_student_day[key] = self.pullouts_by_student_day.get(key, 0) + 1
+                self.pullout_periods_by_student_day.setdefault(key, []).append(period)
 
     def remove_student_entry_at_slot(self, entries, student_id, day, period):
         kept = []
@@ -586,14 +602,16 @@ def build_specials_schedule(
         return ""
 
     def session_length(subject):
-        return SPECIALS_SESSION_LENGTH_MINUTES.get(subject, DEFAULT_SPECIALS_SESSION_LENGTH_MINUTES)
+        return period_config.specials_session_length_minutes.get(
+            subject, DEFAULT_SPECIALS_SESSION_LENGTH_MINUTES
+        )
 
     def sessions_needed_for(subject):
-        mandated_minutes = SPECIALS_MANDATED_MINUTES_PER_WEEK.get(subject)
+        mandated_minutes = SPECIALS_MANDATED_MINUTES_PER_WEEK.get(subject)  # unchanged, not configurable
         if mandated_minutes:
             return max(1, round(mandated_minutes / session_length(subject)))
         return period_config.specials_sessions_per_week.get(subject, 0)
-
+    
     for homeroom, roster in homerooms.items():
         sample = roster[0]
         grade_group = period_config.get_group_for_student(sample)
@@ -1053,7 +1071,7 @@ def find_open_slot_fast(
     for day in DAYS:
 
         if is_pullout:
-            if index.pullout_limit_reached(student_id, day):
+            if index.pullout_limit_reached(student_id, day, period_config):
                 continue
             if index.same_service_limit_reached(student_id, service_type, day):
                 continue
@@ -1061,6 +1079,11 @@ def find_open_slot_fast(
                 continue
 
         for period in period_config.periods:
+            if is_pullout and period in period_config.blackout_periods:
+                continue
+            if is_pullout and index.violates_min_gap(student_id, day, period, period_config):
+                continue
+
             if index.is_student_busy(student_id, day, period):
                 continue
 
@@ -1138,6 +1161,12 @@ def pick_teacher_for_service(
         elif service_lower == "counseling" and (
             "counselor" in title or "psychologist" in title or "social worker" in title
         ):
+            candidates.append(name)
+        elif service_lower == "ot" and "occupational therap" in title:
+            candidates.append(name)
+        elif service_lower == "pt" and "physical therap" in title:
+            candidates.append(name)
+        elif service_lower == "ict" and "ict co-teacher" in title:
             candidates.append(name)
 
     if not candidates:
@@ -1368,7 +1397,7 @@ def schedule_iep_services_first(
             is_pullout = service["is_pullout"]
 
             session_length = session_length_for_service(service_type)
-            sessions_needed = max(1, round(minutes / session_length))
+            sessions_needed = max(1, math.ceil(minutes / session_length))
             teacher = pick_teacher_for_service(
                 service_type, staff_members, load_fn=service_teacher_load_fn
             )
@@ -1376,56 +1405,57 @@ def schedule_iep_services_first(
             no_qualified_staff = not teacher
             scheduled_sessions = 0
 
-            for _ in range(sessions_needed):
-                slot = find_open_slot_fast(
-                    index=schedule_index,
-                    student=student,
-                    period_config=period_config,
-                    teacher=teacher,
-                    subject=subject,
-                    service_type=service_type,
-                    is_pullout=is_pullout
-                )
-
-                if slot is None:
-                    break
-
-                day, period = slot
-
-                entry = {
-                    "student_id": student_id,
-                    "day_of_week": day,
-                    "period": period,
-                    "subject": subject,
-                    "teacher": teacher,
-                    "room": "",
-                    "is_pullout": is_pullout,
-                    "service_type": service_type,
-                    "is_flex_period": period == period_config.flex_period(student)
-                }
-                if is_pullout:
-                    schedule_index.remove_student_entry_at_slot(
-                        entries=all_entries,
-                        student_id=student_id,
-                        day=day,
-                        period=period
+            if not no_qualified_staff:
+                for _ in range(sessions_needed):
+                    slot = find_open_slot_fast(
+                        index=schedule_index,
+                        student=student,
+                        period_config=period_config,
+                        teacher=teacher,
+                        subject=subject,
+                        service_type=service_type,
+                        is_pullout=is_pullout
                     )
-                all_entries.append(entry)
-                schedule_index.add_entry(entry)
 
-                add_to_staff_schedule(
-                    staff_schedule=staff_schedule,
-                    teacher=teacher,
-                    day=day,
-                    period=period,
-                    student_id=student_id,
-                    student_name=student_name,
-                    subject=subject,
-                    service_type=service_type,
-                    is_pullout=is_pullout
-                )
+                    if slot is None:
+                        break
 
-                scheduled_sessions += 1
+                    day, period = slot
+
+                    entry = {
+                        "student_id": student_id,
+                        "day_of_week": day,
+                        "period": period,
+                        "subject": subject,
+                        "teacher": teacher,
+                        "room": "",
+                        "is_pullout": is_pullout,
+                        "service_type": service_type,
+                        "is_flex_period": period == period_config.flex_period(student)
+                    }
+                    if is_pullout:
+                        schedule_index.remove_student_entry_at_slot(
+                            entries=all_entries,
+                            student_id=student_id,
+                            day=day,
+                            period=period
+                        )
+                    all_entries.append(entry)
+                    schedule_index.add_entry(entry)
+
+                    add_to_staff_schedule(
+                        staff_schedule=staff_schedule,
+                        teacher=teacher,
+                        day=day,
+                        period=period,
+                        student_id=student_id,
+                        student_name=student_name,
+                        subject=subject,
+                        service_type=service_type,
+                        is_pullout=is_pullout
+                    )
+
+                    scheduled_sessions += 1
 
             if teacher and scheduled_sessions:
                 service_teacher_load[teacher] = (

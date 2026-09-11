@@ -3,6 +3,21 @@ import { startScheduleGeneration, getScheduleGenerationStatus, type ScheduleJobS
 import "./GenerateScheduleModal.css";
 
 // ---------- Types ----------
+export interface GradeGroupAssignment {
+  id: string;
+  label: string;
+  grades: string[];
+  flex_period_id: string;
+  lunch_period_id: string;
+}
+
+export interface ScheduleGenerationConfig {
+  periods: PeriodDefinition[];
+  grade_groups: GradeGroupAssignment[];
+  pullout_constraints: PulloutConstraints;
+  specials_requirements: SpecialsRequirement[];
+}
+
 
 export interface PeriodDefinition {
   id: string;
@@ -26,11 +41,11 @@ export interface SpecialsRequirement {
   session_length_minutes: number;
 }
 
-export interface ScheduleGenerationConfig {
-  periods: PeriodDefinition[];
-  pullout_constraints: PulloutConstraints;
-  specials_requirements: SpecialsRequirement[];
-}
+const DEFAULT_GRADE_GROUPS: GradeGroupAssignment[] = [
+  { id: "K/1", label: "Kindergarten & 1st Grade", grades: ["PK", "K", "1"], flex_period_id: "p3", lunch_period_id: "p4" },
+  { id: "2/3", label: "2nd & 3rd Grade", grades: ["2", "3"], flex_period_id: "p4", lunch_period_id: "p5" },
+  { id: "4/5", label: "4th & 5th Grade", grades: ["4", "5"], flex_period_id: "p5", lunch_period_id: "p6" },
+];
 
 interface GenerateScheduleModalProps {
   onClose: () => void;
@@ -62,13 +77,14 @@ function nextId(prefix: string) {
   return `${prefix}_${Date.now()}_${idCounter}`;
 }
 
-type Tab = "periods" | "pullouts" | "specials";
+type Tab = "periods" | "grade_groups" | "pullouts" | "specials";
 
 const POLL_INTERVAL_MS = 750;
 
 export default function GenerateScheduleModal({ onClose, onGenerated }: GenerateScheduleModalProps) {
   const [tab, setTab] = useState<Tab>("periods");
   const [periods, setPeriods] = useState<PeriodDefinition[]>(DEFAULT_PERIODS);
+  const [gradeGroups, setGradeGroups] = useState<GradeGroupAssignment[]>(DEFAULT_GRADE_GROUPS);
   const [pulloutConstraints, setPulloutConstraints] = useState<PulloutConstraints>({
     max_pullouts_per_day: 2,
     min_gap_minutes: 30,
@@ -83,17 +99,6 @@ export default function GenerateScheduleModal({ onClose, onGenerated }: Generate
 
   const pollRef = useRef<number | null>(null);
 
-  // ---------- Progress bar smoothing ----------
-  // The backend reports discrete stage/percent snapshots via polling,
-  // and several stages complete in milliseconds against small/test
-  // datasets -- so the raw jobStatus.percent can jump from 0% to 85%
-  // in a single poll, or sit frozen during the one genuinely slow
-  // step (saving to the database). displayedPercent decouples what's
-  // rendered from the raw poll value: a CSS transition on width turns
-  // any jump into a visible sweep, and a small "creep" nudges the bar
-  // forward during long-running stages so it never looks stalled.
-  // The percent LABEL still shows the real jobStatus.percent, so the
-  // numeric readout is always honest even while the bar creeps.
   const [displayedPercent, setDisplayedPercent] = useState(0);
   const creepRef = useRef<number | null>(null);
 
@@ -184,6 +189,23 @@ export default function GenerateScheduleModal({ onClose, onGenerated }: Generate
       ...prev,
       blackout_period_ids: prev.blackout_period_ids.filter((pid) => pid !== id),
     }));
+    // A removed period can no longer be referenced as a grade group's
+    // flex or lunch period -- clear it rather than leaving a dangling
+    // id, which would silently fail validation on submit with no clue
+    // as to why.
+    setGradeGroups((prev) =>
+      prev.map((g) => ({
+        ...g,
+        flex_period_id: g.flex_period_id === id ? "" : g.flex_period_id,
+        lunch_period_id: g.lunch_period_id === id ? "" : g.lunch_period_id,
+      }))
+    );
+  }
+
+  // ---------- Grade group handlers ----------
+
+  function updateGradeGroup(id: string, field: "flex_period_id" | "lunch_period_id", value: string) {
+    setGradeGroups((prev) => prev.map((g) => (g.id === id ? { ...g, [field]: value } : g)));
   }
 
   // ---------- Pullout constraint handlers ----------
@@ -228,6 +250,15 @@ export default function GenerateScheduleModal({ onClose, onGenerated }: Generate
       if (!p.start_time || !p.end_time) return `${p.name || "A period"} is missing a start or end time.`;
       if (p.start_time >= p.end_time) return `${p.name}: start time must be before end time.`;
     }
+    if (gradeGroups.length === 0) return "Add at least one grade group.";
+    for (const g of gradeGroups) {
+      if (!g.flex_period_id || !g.lunch_period_id) {
+        return `${g.label}: assign both a FLEX and a Lunch period.`;
+      }
+      if (g.flex_period_id === g.lunch_period_id) {
+        return `${g.label}: FLEX and Lunch can't be the same period.`;
+      }
+    }
     if (pulloutConstraints.max_pullouts_per_day < 1) return "Max pullouts per day must be at least 1.";
     if (pulloutConstraints.min_gap_minutes < 0) return "Minimum gap can't be negative.";
     for (const s of specials) {
@@ -258,6 +289,7 @@ export default function GenerateScheduleModal({ onClose, onGenerated }: Generate
 
     const config: ScheduleGenerationConfig = {
       periods,
+      grade_groups: gradeGroups,
       pullout_constraints: pulloutConstraints,
       specials_requirements: specials,
     };
@@ -309,6 +341,12 @@ export default function GenerateScheduleModal({ onClose, onGenerated }: Generate
             onClick={() => setTab("periods")}
           >
             Bell Schedule
+          </button>
+          <button
+            className={tab === "grade_groups" ? "active" : ""}
+            onClick={() => setTab("grade_groups")}
+          >
+            Grade Groups
           </button>
           <button
             className={tab === "pullouts" ? "active" : ""}
@@ -370,6 +408,45 @@ export default function GenerateScheduleModal({ onClose, onGenerated }: Generate
               <button className="gsm-add-btn" onClick={addPeriod}>
                 + Add Period
               </button>
+            </div>
+          )}
+
+          {tab === "grade_groups" && (
+            <div className="gsm-section">
+              <p className="gsm-hint">
+                Each grade band needs its own FLEX and Lunch period. These
+                drive where mandated pullouts, FLEX groups, and Specials can
+                be placed for students in that band.
+              </p>
+              {gradeGroups.map((g) => (
+                <div className="gsm-field" key={g.id}>
+                  <strong>{g.label}</strong>
+                  <label>
+                    FLEX period
+                    <select
+                      value={g.flex_period_id}
+                      onChange={(e) => updateGradeGroup(g.id, "flex_period_id", e.target.value)}
+                    >
+                      <option value="">-- select --</option>
+                      {periods.map((p) => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Lunch period
+                    <select
+                      value={g.lunch_period_id}
+                      onChange={(e) => updateGradeGroup(g.id, "lunch_period_id", e.target.value)}
+                    >
+                      <option value="">-- select --</option>
+                      {periods.map((p) => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              ))}
             </div>
           )}
 
