@@ -1,9 +1,10 @@
 .dashboard {
-  padding: 20px;
-  background: #f7f8fa;
+  padding: 28px 36px;
+  background: var(--bg-page);
   min-height: 100vh;
-  font-family: Arial, sans-serif;
-  color: #000000; /* 👈 FIX: strong readable text */
+  font-family: var(--font-body);
+  color: var(--text-h);
+  box-sizing: border-box;
 }
 /* HEADER */
 .dashboard-header {
@@ -11,61 +12,69 @@
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
-  color: #d8abab; /* 👈 FIX: darker header text */
+  color: var(--text-h);
 }
 
 .dashboard-header h1 {
-  color: #000000;
+  color: var(--text-h);
 }
 
 .actions button {
   margin-left: 10px;
-  padding: 8px 12px;
-  border: none;
-  border-radius: 8px;
+  padding: 10px 16px;
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
   cursor: pointer;
-  background: #fff;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-  color: #000000; /* 👈 FIX: ensure buttons are readable */
+  background: white;
+  font-family: var(--font-body);
+  font-weight: 600;
+  color: var(--text-h);
 }
 
 .actions .danger {
-  background: #fee2e2;
-  color: #b91c1c;
+  background: var(--red-100);
+  border-color: var(--red-100);
+  color: var(--red-500);
 }
 
 /* KPI GRID */
 .kpi-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px;
-  margin-bottom: 20px;
+  gap: 16px;
+  margin-bottom: 24px;
 }
 
 .kpi-card {
   background: white;
-  padding: 14px;
-  border-radius: 12px;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+  padding: 18px 20px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 10px rgba(20, 50, 35, 0.06);
 }
 
 .kpi-label {
-  font-size: 13px;
-  color: #4b5563; /* darker gray */
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text);
 }
 
 .kpi-value {
-  font-size: 26px;
-  font-weight: bold;
-  margin-top: 5px;
+  font-family: var(--font-heading);
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--green-700);
+  margin-top: 6px;
 }
 
 .kpi-card.alert {
-  border-left: 4px solid #ef4444;
+  border-left: 4px solid var(--red-500);
 }
 
 .kpi-card.warn {
-  border-left: 4px solid #f59e0b;
+  border-left: 4px solid var(--amber-500);
 }
 
 /* GRID */
@@ -77,7 +86,7 @@
 .progress-track {
   width: 100%;
   height: 6px;
-  background: #e5e7eb;
+  background: var(--border);
   border-radius: 3px;
   overflow: hidden;
   margin-top: 0.75rem;
@@ -86,7 +95,7 @@
 .progress-bar-indeterminate {
   width: 40%;
   height: 100%;
-  background: #2563eb;
+  background: var(--green-500);
   border-radius: 3px;
   animation: indeterminate-slide 1.2s ease-in-out infinite;
 }
@@ -99,31 +108,33 @@
 .compliance-result {
   margin-top: 0.75rem;
   padding-top: 0.75rem;
-  border-top: 1px solid #e5e7eb;
+  border-top: 1px solid var(--border);
 }
 /* PANELS */
 .panel {
-  background: rgb(255, 255, 255);
-  padding: 16px;
-  border-radius: 12px;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+  background: white;
+  padding: 20px 22px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 10px rgba(20, 50, 35, 0.06);
   height: 100%;
-  color: #000000; /* 👈 ensure contrast inside panels */
+  color: var(--text-h);
+  box-sizing: border-box;
 }
 
 .panel h2 {
   margin-bottom: 10px;
   font-size: 16px;
-  color: #000000; /* darker text for headers */
+  color: var(--text-h);
 }
 
 /* ALERTS */
 .alert-item {
-  padding: 10px;
-  border-radius: 8px;
+  padding: 12px 14px;
+  border-radius: 10px;
   margin-bottom: 10px;
   font-size: 13px;
-  color: #000000; /* 👈 important fix */
+  color: var(--text-h);
 }
 
 .alert-item p {
@@ -131,17 +142,17 @@
 }
 
 .alert-item.critical {
-  background: #ff0000;
-  border-left: 4px solid #dc2626;
+  background: var(--red-100);
+  border-left: 4px solid var(--red-500);
 }
 
 .alert-item.warning {
-  background: #fef3c7;
-  border-left: 4px solid #f59e0b;
+  background: var(--amber-100);
+  border-left: 4px solid var(--amber-500);
 }
 
 .empty {
-  color: #000000; /* darker than before */
+  color: var(--text);
   font-size: 13px;
 }
 
@@ -149,91 +160,73 @@
 .action-btn {
   width: 100%;
   margin-bottom: 10px;
-  padding: 10px;
+  padding: 11px;
   border: none;
-  border-radius: 8px;
-  background: #eef2ff;
+  border-radius: 10px;
+  background: var(--green-100);
   cursor: pointer;
-  font-weight: 500;
-  transition: 0.15s;
-  color: #000000;
+  font-family: var(--font-body);
+  font-weight: 600;
+  color: var(--green-700);
+  transition: background 0.15s;
 }
 
 .action-btn:hover {
-  background: #e0e7ff;
+  background: var(--green-400);
+  color: var(--green-700);
 }
 
 .schedule-table-container {
-    width: 100%;
-    overflow-x: auto;
+  width: 100%;
+  overflow-x: auto;
 }
-
 
 .schedule-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 20px;
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 20px;
 }
-
 
 .schedule-table th {
-    padding: 14px;
-    text-align: center;
-    background: #111827;
-    color: white;
+  padding: 14px;
+  text-align: center;
+  background: var(--gradient-primary);
+  color: white;
+  font-family: var(--font-heading);
 }
-
 
 .schedule-table td {
-
-    border: 1px solid #ddd;
-    padding: 10px;
-    vertical-align: top;
-
-    min-width: 180px;
-    height: 120px;
+  border: 1px solid var(--border);
+  padding: 10px;
+  vertical-align: top;
+  min-width: 180px;
+  height: 120px;
 }
-
 
 .period-cell {
-
-    font-weight: bold;
-    text-align: center;
-    background: #f3f4f6;
-
+  font-weight: 700;
+  text-align: center;
+  background: var(--green-100);
+  color: var(--green-700);
 }
-
 
 .schedule-card {
-
-    background: #eef2ff;
-    border-radius: 8px;
-
-    padding: 10px;
-    margin-bottom: 8px;
-
-    font-size: 14px;
-
+  background: white;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--green-600);
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 8px;
+  font-size: 14px;
 }
-
 
 .schedule-card strong {
-
-    display:block;
-    margin-bottom:5px;
-
+  display: block;
+  margin-bottom: 5px;
+  color: var(--text-h);
 }
-
 
 .schedule-card p {
-
-    margin:3px 0;
-
-}
-
-
-.empty {
-
-    color:#aaa;
-
+  margin: 3px 0;
+  color: var(--text);
 }

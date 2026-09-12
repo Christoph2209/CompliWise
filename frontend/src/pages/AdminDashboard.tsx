@@ -195,7 +195,7 @@ export default function Dashboard() {
           )}
 
           {complianceError && (
-            <p style={{ color: "#dc2626", fontSize: "0.85rem", marginTop: "0.5rem" }}>
+            <p style={{ color: "var(--red-500)", fontSize: "0.85rem", marginTop: "0.5rem" }}>
               {complianceError}
             </p>
           )}
@@ -203,7 +203,7 @@ export default function Dashboard() {
           {!checkingCompliance && complianceResult && (
             <div className="compliance-result">
               {complianceResult.flags.length === 0 ? (
-                <p style={{ color: "#16a34a", fontSize: "0.85rem" }}>
+                <p style={{ color: "var(--green-600)", fontSize: "0.85rem" }}>
                   ✅ No staffing issues found
                 </p>
               ) : (
@@ -218,13 +218,13 @@ export default function Dashboard() {
                       <div
                         key={i}
                         style={{
-                          borderLeft: `3px solid ${f.severity === "critical" ? "#dc2626" : "#d97706"}`,
+                          borderLeft: `3px solid ${f.severity === "critical" ? "var(--red-500)" : "var(--amber-500)"}`,
                           paddingLeft: "0.6rem",
                           fontSize: "0.8rem",
                         }}
                       >
                         <strong>{f.title}</strong>
-                        <p style={{ margin: "0.15rem 0 0", color: "#4b5563" }}>{f.description}</p>
+                        <p style={{ margin: "0.15rem 0 0", color: "var(--text)" }}>{f.description}</p>
                       </div>
                     ))}
                   </div>

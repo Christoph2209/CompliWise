@@ -15,8 +15,8 @@
   --sw-ink-2: #24413c;
   --sw-paper: #eef1ec;
   --sw-paper-dim: #e2e6df;
-  --sw-accent: #d9a441;
-  --sw-accent-ink: #4a3410;
+  --sw-accent: var(--green-500);
+  --sw-accent-ink: #14361f;
   --sw-text: #1b2a28;
   --sw-muted: #5b6b66;
   --sw-error: #b3432b;
@@ -199,14 +199,14 @@
   padding: 11px 20px;
   border-radius: 4px;
   border: none;
-  background: var(--sw-ink);
+  background: var(--gradient-primary);
   color: var(--sw-paper);
   cursor: pointer;
-  transition: background 0.15s ease, transform 0.1s ease;
+  transition: box-shadow 0.15s ease, transform 0.1s ease;
 }
 
 .setup-wizard__btn:hover:not(:disabled) {
-  background: var(--sw-ink-2);
+  box-shadow: 0 6px 16px rgba(31, 111, 78, 0.35);
 }
 
 .setup-wizard__btn:active:not(:disabled) {
