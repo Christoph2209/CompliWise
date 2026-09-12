@@ -26,29 +26,29 @@ export default function AuditLogPage() {
   }, []);
 
   const getColor = (action: string) => {
-    if (action.includes("login")) return "#e0f2fe";
-    if (action.includes("resolve")) return "#dcfce7";
-    if (action.includes("generate")) return "#f3e8ff";
-    if (action.includes("update")) return "#fef3c7";
-    return "#f3f4f6";
+    if (action.includes("login")) return "var(--blue-100)";
+    if (action.includes("resolve")) return "var(--green-100)";
+    if (action.includes("generate")) return "#ece7f7";
+    if (action.includes("update")) return "var(--amber-100)";
+    return "var(--bg-page)";
   };
 
   return (
-    <div style={{ padding: "20px", fontFamily: "Arial" }}>
-      <h1 style={{ color: "#000000" }}>Audit Log</h1>
+    <div style={{ padding: "28px 36px" }}>
+      <h1>Audit Log</h1>
 
-      <p style={{ color: "#666" }}>
+      <p style={{ color: "var(--text)" }}>
         Live data from database (AuditLog table)
       </p>
 
       {error && (
-        <div style={{ background: "#fee2e2", padding: "10px", marginBottom: "10px" }}>
+        <div style={{ background: "var(--red-100)", color: "var(--red-500)", padding: "10px", borderRadius: "10px", marginBottom: "10px" }}>
           {error}
         </div>
       )}
 
       {logs.length === 0 ? (
-        <div style={{ background: "#f3f4f6", padding: "10px" }}>
+        <div style={{ background: "var(--bg-page)", color: "var(--text)", padding: "10px", borderRadius: "10px" }}>
           No audit log entries found
         </div>
       ) : (
@@ -69,19 +69,19 @@ export default function AuditLogPage() {
 
               return (
                 <tr key={log.id} style={{ background: getColor(log.action) }}>
-                  <td style={{ padding: "10px", color: "#000000", whiteSpace: "nowrap" }}>
+                  <td style={{ padding: "10px", color: "var(--text-h)", whiteSpace: "nowrap" }}>
                     {new Date(log.created_at).toLocaleString()}
                   </td>
 
-                  <td style={{ padding: "10px", color: "#000000" }}>
+                  <td style={{ padding: "10px", color: "var(--text-h)" }}>
                     {log.action}
                   </td>
 
-                  <td style={{ padding: "10px", color: "#000000" }}>
+                  <td style={{ padding: "10px", color: "var(--text-h)" }}>
                     {log.user_name || log.user_email || "—"}
                   </td>
 
-                  <td style={{ padding: "10px", color: "#000000" }}>
+                  <td style={{ padding: "10px", color: "var(--text-h)" }}>
                     {log.entity_type
                       ? `${log.entity_type}${log.entity_id ? ` (${log.entity_id.slice(0, 8)}…)` : ""}`
                       : "—"}
@@ -103,8 +103,9 @@ export default function AuditLogPage() {
                         style={{
                           marginTop: "8px",
                           padding: "8px",
-                          background: "#ffffff",
-                          border: "1px solid #ddd",
+                          background: "white",
+                          border: "1px solid var(--border)",
+                          borderRadius: "8px",
                           fontSize: "12px",
                           maxWidth: "500px",
                           overflowX: "auto",

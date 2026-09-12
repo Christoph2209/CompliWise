@@ -1,13 +1,13 @@
 .students-page {
   padding: 24px 28px;
-  background: #f9fafb;
+  background: var(--bg-page);
   min-height: 100%;
 }
 
 .students-page h1 {
   margin: 0 0 18px;
   font-size: 22px;
-  color: #111827;
+  color: var(--text-h);
 }
 
 .students-filters {
@@ -20,32 +20,34 @@
 .students-search {
   flex: 1;
   min-width: 220px;
-  padding: 8px 12px;
-  border: 1px solid #d1d5db;
-  border-radius: 6px;
+  padding: 9px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
   font-size: 13px;
   background: #fff;
-  color: #111827;
+  color: var(--text-h);
+  font-family: var(--font-body);
 }
 
 .students-search:focus {
   outline: none;
-  border-color: #2563eb;
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+  border-color: var(--green-500);
+  box-shadow: 0 0 0 3px var(--green-100);
 }
 
 .students-filter-select {
-  padding: 8px 12px;
-  border: 1px solid #d1d5db;
-  border-radius: 6px;
+  padding: 9px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
   font-size: 13px;
   background: #fff;
-  color: #111827;
+  color: var(--text-h);
+  font-family: var(--font-body);
   cursor: pointer;
 }
 
 .students-empty {
-  color: #6b7280;
+  color: var(--text);
   font-size: 14px;
 }
 
@@ -57,22 +59,22 @@
 
 .student-card {
   background: #fff;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
   padding: 14px 16px;
   cursor: pointer;
   transition: box-shadow 0.15s ease, border-color 0.15s ease;
 }
 
 .student-card:hover {
-  border-color: #2563eb;
-  box-shadow: 0 2px 10px rgba(37, 99, 235, 0.12);
+  border-color: var(--green-400);
+  box-shadow: 0 2px 10px rgba(31, 111, 78, 0.14);
 }
 
 .student-name {
   font-size: 15px;
-  font-weight: 600;
-  color: #111827;
+  font-weight: 700;
+  color: var(--text-h);
   margin-bottom: 10px;
 }
 
@@ -89,11 +91,11 @@
 }
 
 .student-info-label {
-  color: #6b7280;
+  color: var(--text);
 }
 
 .student-info-value {
-  color: #111827;
+  color: var(--text-h);
   font-weight: 500;
 }
 
@@ -105,13 +107,13 @@
 }
 
 .student-badge-yes {
-  background: #dbeafe;
-  color: #1d4ed8;
+  background: var(--green-100);
+  color: var(--green-700);
 }
 
 .student-badge-no {
-  background: #f3f4f6;
-  color: #6b7280;
+  background: var(--bg-page);
+  color: var(--text);
 }
 
 /* StudentEditor.css */
@@ -119,7 +121,7 @@
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(17, 24, 39, 0.55);
+  background: rgba(15, 30, 22, 0.5);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -129,12 +131,12 @@
 
 .student-modal {
   background: #fff;
-  border-radius: 10px;
+  border-radius: 14px;
   width: 100%;
   max-width: 560px;
   max-height: 90vh;
   overflow-y: auto;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 20px 60px rgba(15, 30, 22, 0.25);
   display: flex;
   flex-direction: column;
 }
@@ -144,7 +146,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 18px 20px;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
   background: #fff;
@@ -154,21 +156,22 @@
 .modal-header h2 {
   margin: 0;
   font-size: 17px;
-  color: #111827;
+  color: var(--text-h);
+  font-family: var(--font-heading);
 }
 
 .modal-close-btn {
   background: none;
   border: none;
   font-size: 16px;
-  color: #6b7280;
+  color: var(--text);
   cursor: pointer;
   line-height: 1;
   padding: 4px;
 }
 
 .modal-close-btn:hover {
-  color: #111827;
+  color: var(--text-h);
 }
 
 .modal-body {
@@ -179,8 +182,8 @@
 }
 
 .field-group {
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
   padding: 14px 16px;
 }
 
@@ -188,7 +191,7 @@
   padding: 0 6px;
   font-size: 12px;
   font-weight: 600;
-  color: #6b7280;
+  color: var(--text);
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
@@ -206,25 +209,26 @@
 
 .field-row label {
   font-size: 12px;
-  color: #374151;
+  color: var(--text-h);
   font-weight: 500;
 }
 
 .field-row input,
 .field-row select {
   padding: 8px 10px;
-  border: 1px solid #d1d5db;
-  border-radius: 6px;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
   font-size: 13px;
-  color: #111827;
+  color: var(--text-h);
   background: #fff;
+  font-family: var(--font-body);
 }
 
 .field-row input:focus,
 .field-row select:focus {
   outline: none;
-  border-color: #2563eb;
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+  border-color: var(--green-500);
+  box-shadow: 0 0 0 3px var(--green-100);
 }
 
 .field-row-checkbox {
@@ -236,14 +240,15 @@
 .field-row-checkbox input {
   width: 16px;
   height: 16px;
+  accent-color: var(--green-600);
 }
 
 .modal-error {
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  color: #b91c1c;
+  background: var(--red-100);
+  border: 1px solid var(--red-100);
+  color: var(--red-500);
   padding: 10px 12px;
-  border-radius: 6px;
+  border-radius: 8px;
   font-size: 13px;
 }
 
@@ -252,44 +257,47 @@
   justify-content: flex-end;
   gap: 10px;
   padding: 16px 20px;
-  border-top: 1px solid #e5e7eb;
+  border-top: 1px solid var(--border);
   position: sticky;
   bottom: 0;
   background: #fff;
 }
 
 .save-btn {
-  background: #2563eb;
+  background: var(--gradient-primary);
   color: #fff;
   border: none;
-  padding: 8px 16px;
-  border-radius: 6px;
+  padding: 9px 18px;
+  border-radius: 10px;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
+  font-family: var(--font-body);
   cursor: pointer;
 }
 
 .save-btn:hover {
-  background: #1d4ed8;
+  box-shadow: 0 6px 16px rgba(31, 111, 78, 0.3);
 }
 
 .save-btn:disabled {
-  background: #93c5fd;
+  background: var(--green-400);
   cursor: not-allowed;
+  box-shadow: none;
 }
 
 .cancel-btn {
   background: #fff;
-  color: #374151;
-  border: 1px solid #d1d5db;
-  padding: 8px 16px;
-  border-radius: 6px;
+  color: var(--text-h);
+  border: 1.5px solid var(--border);
+  padding: 9px 18px;
+  border-radius: 10px;
   font-size: 13px;
+  font-family: var(--font-body);
   cursor: pointer;
 }
 
 .cancel-btn:hover {
-  background: #f9fafb;
+  background: var(--bg-page);
 }
 
 .cancel-btn:disabled {

@@ -329,7 +329,7 @@ export default function GenerateScheduleModal({ onClose, onGenerated }: Generate
     <div className="gsm-overlay" onClick={onClose}>
       <div className="gsm-modal" onClick={(e) => e.stopPropagation()}>
         <div className="gsm-header">
-          <h2 style ={{ color: "#000000" }}>Generate Schedule</h2>
+          <h2>Generate Schedule</h2>
           <button className="gsm-close" onClick={onClose} aria-label="Close">
             ✕
           </button>

@@ -35,7 +35,7 @@ export default function RunSelector({ selectedRunId, onChange }: RunSelectorProp
       <select
         value={selectedRunId || ""}
         onChange={(e) => onChange(e.target.value)}
-        style={{ padding: "6px 10px", borderRadius: "6px", border: "1px solid #ccc" }}
+        style={{ padding: "8px 12px", borderRadius: "10px", border: "1.5px solid var(--border)", fontFamily: "var(--font-body)" }}
       >
         {runs.map((r) => (
           <option key={r.id} value={r.id}>
