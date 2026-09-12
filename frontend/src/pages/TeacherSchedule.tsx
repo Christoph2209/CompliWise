@@ -64,8 +64,8 @@ function getStudentCount(day: string, period: number) {
   ).length;
 }
   return (
-    <div style={{ padding: "20px", fontFamily: "Arial, sans-serif" }}>
-      <h1 style={{ marginBottom: "16px", color: "#000000" }}>Staff Schedules</h1>
+    <div style={{ padding: "28px 36px" }}>
+      <h1 style={{ marginBottom: "16px" }}>Staff Schedules</h1>
 
       {canCompareRuns && (
         <RunSelector selectedRunId={selectedRunId} onChange={setSelectedRunId} />
@@ -80,9 +80,10 @@ function getStudentCount(day: string, period: number) {
           value={selectedTeacher}
           onChange={(e) => setSelectedTeacher(e.target.value)}
           style={{
-            padding: "6px 10px",
-            borderRadius: "6px",
-            border: "1px solid #ccc",
+            padding: "8px 12px",
+            borderRadius: "10px",
+            border: "1.5px solid var(--border)",
+            fontFamily: "var(--font-body)",
           }}
         >
           {staff.map((s) => (
@@ -134,25 +135,25 @@ function getStudentCount(day: string, period: number) {
                       minWidth: "140px",
                       height: "90px",
                       verticalAlign: "top",
-                      background: item ? "#f9fafb" : "#fff",
+                      background: item ? "var(--green-100)" : "white",
                       borderRadius: "10px",
                       padding: "10px",
-                      border: "1px solid #e5e7eb",
+                      border: "1px solid var(--border)",
                       position: "relative",
                       cursor: item ? "pointer" : "default",
                     }}
                   >
                     {item ? (
                         <div style={{ fontSize: "13px" }}>
-                        <strong style={{ display: "block", marginBottom: "4px" }}>
+                        <strong style={{ display: "block", marginBottom: "4px", color: "var(--text-h)" }}>
                             {item.subject}
                         </strong>
 
-                        <span style={{ display: "block", color: "#555" }}>
+                        <span style={{ display: "block", color: "var(--text)" }}>
                             {item.staff_name || "No Teacher"}
                         </span>
 
-                        <small style={{ display: "block", marginTop: "4px", color: "#777" }}>
+                        <small style={{ display: "block", marginTop: "4px", color: "var(--text)" }}>
                             {item.service_type}
                         </small>
 
@@ -161,7 +162,7 @@ function getStudentCount(day: string, period: number) {
                             style={{
                                 marginTop: "6px",
                                 fontSize: "11px",
-                                color: "#b91c1c",
+                                color: "var(--red-500)",
                                 fontWeight: "bold",
                             }}
                             >
@@ -169,13 +170,13 @@ function getStudentCount(day: string, period: number) {
                             </div>
                         )}
 
-                        {/* NEW: student count badge */}
+                        {/* student count badge */}
                         <div
                             style={{
                             position: "absolute",
                             top: "6px",
                             right: "6px",
-                            background: "#111827",
+                            background: "var(--green-700)",
                             color: "white",
                             fontSize: "11px",
                             padding: "2px 6px",
@@ -186,7 +187,7 @@ function getStudentCount(day: string, period: number) {
                         </div>
                         </div>
                     ) : (
-                        <span style={{ color: "#ccc" }}>—</span>
+                        <span style={{ color: "var(--text)" }}>—</span>
                     )}
                     </td>
                   );

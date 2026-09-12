@@ -8,8 +8,17 @@
   max-width: 300px;
   padding: 10px 12px;
   margin: 10px 0 20px 0;
-  border: 1px solid #ddd;
-  border-radius: 8px;
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
+  font-family: var(--font-body);
+  color: var(--text-h);
+  background: white;
+}
+
+.staff-search:focus {
+  outline: none;
+  border-color: var(--green-500);
+  box-shadow: 0 0 0 3px var(--green-100);
 }
 
 /* GRID */
@@ -22,28 +31,30 @@
 /* CARD */
 .staff-card {
   background: white;
-  border-radius: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
   padding: 14px;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+  box-shadow: 0 2px 10px rgba(20, 50, 35, 0.06);
   transition: all 0.15s ease;
   cursor: pointer;
 }
 
 .staff-card:hover {
   transform: translateY(-4px);
-  box-shadow: 0 10px 22px rgba(2, 61, 255, 0.438);
+  border-color: var(--green-400);
+  box-shadow: 0 10px 22px rgba(31, 111, 78, 0.18);
 }
 
 /* HEADER */
 .staff-name {
-  color:#333;
+  color: var(--text-h);
   font-size: 16px;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .staff-title {
   font-size: 13px;
-  color: #666;
+  color: var(--text);
   margin-bottom: 10px;
 }
 
@@ -57,27 +68,28 @@
 
 .badge {
   font-size: 12px;
-  padding: 4px 8px;
+  padding: 4px 9px;
   border-radius: 999px;
   font-weight: 600;
-  background: #eee;
+  background: var(--bg-page);
+  color: var(--text);
 }
 
 /* YES / NO STATES */
 .badge.yes {
-  background: #e6f7ee;
-  color: #1f7a3f;
+  background: var(--green-100);
+  color: var(--green-700);
 }
 
 .badge.no {
-  background: #fdeaea;
-  color: #b42318;
+  background: var(--red-100);
+  color: var(--red-500);
 }
 
 /* FOOTER */
 .staff-footer {
   font-size: 13px;
-  color: #333;
+  color: var(--text-h);
 }
 
 /* MODAL OVERLAY */
@@ -87,7 +99,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(15, 30, 22, 0.5);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -97,26 +109,27 @@
 /* MODAL CARD */
 .modal-content {
   background: white;
-  color: #333;
-  border-radius: 12px;
+  color: var(--text-h);
+  border-radius: 16px;
   padding: 24px 28px;
   width: 90%;
   max-width: 480px;
   max-height: 85vh;
   overflow-y: auto;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 20px 50px rgba(15, 30, 22, 0.25);
 }
 
 .modal-content h2 {
-  color: #333;
+  color: var(--text-h);
   margin: 0 0 4px 0;
   font-size: 18px;
-  font-weight: 600;
+  font-family: var(--font-heading);
+  font-weight: 800;
 }
 
 .staff-title-sub {
   font-size: 13px;
-  color: #666;
+  color: var(--text);
   margin: 0 0 20px 0;
 }
 
@@ -129,16 +142,19 @@
   display: block;
   font-size: 13px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-h);
   margin-bottom: 8px;
 }
 
 .form-group select {
   width: 100%;
-  padding: 8px 10px;
-  border: 1px solid #ddd;
-  border-radius: 8px;
+  padding: 9px 10px;
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
   font-size: 14px;
+  font-family: var(--font-body);
+  color: var(--text-h);
+  background: white;
 }
 
 /* CHECKBOXES */
@@ -154,7 +170,7 @@
   gap: 8px;
   font-size: 13px;
   font-weight: 400;
-  color: #333;
+  color: var(--text-h);
   cursor: pointer;
 }
 
@@ -162,13 +178,14 @@
   width: 16px;
   height: 16px;
   cursor: pointer;
+  accent-color: var(--green-600);
 }
 
 /* ERROR */
 .form-error {
   font-size: 13px;
-  color: #b42318;
-  background: #fdeaea;
+  color: var(--red-500);
+  background: var(--red-100);
   padding: 8px 10px;
   border-radius: 8px;
   margin-bottom: 12px;
@@ -183,24 +200,26 @@
 }
 
 .modal-actions button {
-  background:#b42318;
-  padding: 8px 18px;
-  border-radius: 8px;
-  border: 1px solid #7d7373;
+  background: white;
+  color: var(--text-h);
+  padding: 9px 18px;
+  border-radius: 10px;
+  border: 1.5px solid var(--border);
   font-size: 13px;
   font-weight: 600;
+  font-family: var(--font-body);
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .modal-actions button.primary {
-  background: #023dff;
-  border-color: #023dff;
+  background: var(--gradient-primary);
+  border-color: var(--green-700);
   color: white;
 }
 
 .modal-actions button.primary:hover {
-  box-shadow: 0 6px 16px rgba(2, 61, 255, 0.35);
+  box-shadow: 0 6px 16px rgba(31, 111, 78, 0.35);
 }
 
 .modal-actions button:disabled {

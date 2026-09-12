@@ -50,7 +50,7 @@ export default function AddUserModal({
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2 style={{ color: "#0c0c0c" }}>Add User</h2>
+          <h2>Add User</h2>
           <button className="modal-close" onClick={onClose}>✕</button>
         </div>
 

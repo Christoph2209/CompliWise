@@ -45,27 +45,27 @@ export default function CompliancePage() {
   }
 
   const getColor = (type: string) => {
-    if (type === "critical") return "#fee2e2";
-    if (type === "warning") return "#fef3c7";
-    return "#dcfce7";
+    if (type === "critical") return "var(--red-100)";
+    if (type === "warning") return "var(--amber-100)";
+    return "var(--green-100)";
   };
 
   return (
-    <div style={{ padding: "20px", fontFamily: "Arial" }}>
-      <h1 style={{ color: "#000000" }}>Compliance Dashboard</h1>
+    <div style={{ padding: "28px 36px" }}>
+      <h1>Compliance Dashboard</h1>
 
-      <p style={{ color: "#666" }}>
+      <p style={{ color: "var(--text)" }}>
         Live data from database (ComplianceFlag table)
       </p>
 
       {error && (
-        <div style={{ background: "#fee2e2", padding: "10px", marginBottom: "10px" }}>
+        <div style={{ background: "var(--red-100)", color: "var(--red-500)", padding: "10px", borderRadius: "10px", marginBottom: "10px" }}>
           {error}
         </div>
       )}
 
       {issues.length === 0 ? (
-        <div style={{ background: "#dcfce7", padding: "10px" }}>
+        <div style={{ background: "var(--green-100)", color: "var(--green-700)", padding: "10px", borderRadius: "10px" }}>
           ✅ No compliance issues found
         </div>
       ) : (
@@ -85,15 +85,15 @@ export default function CompliancePage() {
                 key={issue.id}
                 style={{ background: getColor(issue.severity || issue.type) }}
               >
-                <td style={{ padding: "10px", color: "#000000" }}>
+                <td style={{ padding: "10px", color: "var(--text-h)" }}>
                   {issue.student_name}
                 </td>
 
-                <td style={{ padding: "10px", color: "#000000" }}>
+                <td style={{ padding: "10px", color: "var(--text-h)" }}>
                   {(issue.severity || issue.type)?.toUpperCase()}
                 </td>
 
-                <td style={{ padding: "10px", color: "#000000" }}>
+                <td style={{ padding: "10px", color: "var(--text-h)" }}>
                   {issue.description || issue.message}
                 </td>
 
