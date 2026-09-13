@@ -1,7 +1,7 @@
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.5);
+  background: rgba(15, 30, 22, 0.5);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -10,12 +10,12 @@
 
 .modal-card {
   background: #fff;
-  border-radius: 10px;
+  border-radius: 14px;
   width: 100%;
   max-width: 560px;
   max-height: 90vh;
   overflow-y: auto;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 20px 50px rgba(15, 30, 22, 0.22);
 }
 
 .modal-header {
@@ -23,13 +23,14 @@
   align-items: center;
   justify-content: space-between;
   padding: 1rem 1.5rem;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--border);
 }
 
 .modal-header h2 {
-  color:rgba(0, 0, 0, 0.2);
+  color: var(--text-h);
   margin: 0;
   font-size: 1.1rem;
+  font-family: var(--font-heading);
 }
 
 .modal-close {
@@ -37,7 +38,7 @@
   border: none;
   font-size: 1.1rem;
   cursor: pointer;
-  color: #6b7280;
+  color: var(--text);
 }
 
 .modal-form {
@@ -58,19 +59,26 @@
   flex-direction: column;
   font-size: 0.85rem;
   font-weight: 500;
-  color: #374151;
+  color: var(--text-h);
   gap: 0.3rem;
 }
 
 .form-row input {
   padding: 0.5rem 0.6rem;
-  border: 1px solid #d1d5db;
-  border-radius: 6px;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
   font-size: 0.9rem;
+  font-family: var(--font-body);
+}
+
+.form-row input:focus {
+  outline: none;
+  border-color: var(--green-500);
+  box-shadow: 0 0 0 3px var(--green-100);
 }
 
 .certifications {
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0.75rem 1rem;
 }
@@ -78,7 +86,7 @@
 .certifications legend {
   font-size: 0.8rem;
   font-weight: 600;
-  color: #374151;
+  color: var(--text);
   padding: 0 0.3rem;
 }
 
@@ -90,8 +98,12 @@
   margin: 0.35rem 0;
 }
 
+.checkbox-label input[type="checkbox"] {
+  accent-color: var(--green-600);
+}
+
 .modal-error {
-  color: #b91c1c;
+  color: var(--red-500);
   font-size: 0.85rem;
   margin: 0;
 }
@@ -105,20 +117,22 @@
 
 .modal-actions button {
   padding: 0.55rem 1rem;
-  border-radius: 6px;
+  border-radius: 8px;
   border: none;
   cursor: pointer;
-  font-weight: 500;
+  font-weight: 600;
+  font-family: var(--font-body);
 }
 
 .modal-actions button[type="submit"] {
-  background: #2563eb;
+  background: var(--gradient-primary);
   color: white;
 }
 
 .modal-actions button.secondary {
-  background: #f3f4f6;
-  color: #374151;
+  background: white;
+  border: 1.5px solid var(--border);
+  color: var(--text-h);
 }
 
 .modal-actions button:disabled {

@@ -138,6 +138,10 @@ class PeriodConfig:
         specials_titles: Optional[Dict[str, str]] = None,
         specials_sessions_per_week: Optional[Dict[str, int]] = None,
         allow_specials_merge: bool = True,
+        specials_session_length_minutes: Optional[Dict[str, int]] = None,
+        blackout_periods: Optional[Set[int]] = None,
+        max_pullouts_per_day: Optional[int] = None,
+        min_gap_minutes: int = 0,
     ):
         self.period_times: Dict[int, str] = (
             dict(period_times) if period_times else dict(DEFAULT_PERIOD_TIMES)
@@ -165,6 +169,21 @@ class PeriodConfig:
             else dict(DEFAULT_SPECIALS_SESSIONS_PER_WEEK)
         )
         self.allow_specials_merge: bool = allow_specials_merge
+        self.specials_session_length_minutes: Dict[str, int] = (
+            dict(specials_session_length_minutes)
+            if specials_session_length_minutes
+            else dict(SPECIALS_SESSION_LENGTH_MINUTES)
+        )
+        # NOTE: SPECIALS_MANDATED_MINUTES_PER_WEEK is intentionally NOT
+        # made configurable here. PE's 90 min/week is a state mandate,
+        # not a scheduling preference -- it must not be settable from
+        # the admin UI. Only how many sessions it takes to reach 90
+        # minutes (via specials_session_length_minutes) is configurable.
+        self.blackout_periods: Set[int] = set(blackout_periods) if blackout_periods else set()
+        self.max_pullouts_per_day: int = (
+            max_pullouts_per_day if max_pullouts_per_day is not None else MAX_PULLOUTS_PER_DAY
+        )
+        self.min_gap_minutes: int = max(0, min_gap_minutes)
         self._validate()
 
     def _validate(self):
@@ -193,6 +212,18 @@ class PeriodConfig:
                         f"Grade group '{group}' references period {p}, which "
                         f"isn't in configured periods {self.periods}"
                     )
+        for period in self.blackout_periods:
+                if period not in self.periods:
+                    raise ValueError(
+                    f"blackout_periods references period {period}, which "
+                    f"isn't in configured periods {self.periods}"
+                )
+        flex_lunch_periods = {p for a in self.group_periods.values() for p in a.values()}
+        if self.blackout_periods & flex_lunch_periods:
+                raise ValueError(
+                "blackout_periods overlaps a grade group's flex or lunch "
+                "period -- those are already excluded by definition."
+            )
 
         referenced_groups = set(self.grade_groups.values())
         missing = referenced_groups - set(self.group_periods.keys())
@@ -201,7 +232,123 @@ class PeriodConfig:
                 f"grade_groups references group(s) {missing} that have no "
                 f"entry in group_periods"
             )
+    def _absolute_start_minutes(self) -> Dict[int, int]:
+        result: Dict[int, int] = {}
+        offset = 0
+        prev_raw_end = None
 
+        for period in sorted(self.periods):
+            time_range = self.period_times.get(period)
+            if not time_range:
+                result[period] = offset
+                continue
+            try:
+                start_str, end_str = time_range.split("-")
+                def to_minutes(t):
+                    h, m = t.split(":")
+                    return int(h) * 60 + int(m)
+                raw_start = to_minutes(start_str)
+                raw_end = to_minutes(end_str)
+            except (ValueError, AttributeError):
+                result[period] = offset
+                continue
+
+            if prev_raw_end is not None and raw_start < prev_raw_end:
+                offset += 12 * 60
+
+            if raw_end < raw_start:
+                raw_end += 12 * 60
+
+            result[period] = raw_start + offset
+            prev_raw_end = raw_end + offset
+
+        return result
+
+    def gap_between_periods_minutes(self, period_a: int, period_b: int) -> int:
+        """Clock-minutes between the end of the earlier period and the
+        start of the later one. Returns 0 for adjacent/same periods."""
+        starts = self._absolute_start_minutes()
+        if period_a not in starts or period_b not in starts or period_a == period_b:
+            return 0
+        start_a, start_b = starts[period_a], starts[period_b]
+        dur_a = self.period_duration_minutes(period_a)
+        dur_b = self.period_duration_minutes(period_b)
+        if start_a <= start_b:
+            return max(0, start_b - (start_a + dur_a))
+        return max(0, start_a - (start_b + dur_b))
+
+    @classmethod
+    def from_config(cls, config) -> "PeriodConfig":
+        """
+        Builds a PeriodConfig from the frontend's ScheduleGenerationConfig
+        payload. Every field read here must actually be consumed
+        downstream in scheduler.py -- an admin-facing field that reaches
+        this classmethod but goes nowhere after is exactly the silent
+        no-op bug this project has hit before.
+        """
+        period_defs = config.periods
+        if not period_defs:
+            raise ValueError("At least one period is required.")
+
+        id_to_num = {p["id"]: idx + 1 for idx, p in enumerate(period_defs)}
+
+        period_times = {
+            id_to_num[p["id"]]: f'{p["start_time"]}-{p["end_time"]}'
+            for p in period_defs
+        }
+        periods = sorted(period_times.keys())
+
+        grade_group_defs = getattr(config, "grade_groups", None) or []
+        if not grade_group_defs:
+            raise ValueError(
+                "At least one grade group (with flex/lunch period "
+                "assignments) is required to generate a schedule."
+            )
+
+        group_periods: Dict[str, Dict[str, int]] = {}
+        grade_groups: Dict[str, str] = {}
+
+        for group in grade_group_defs:
+            flex_id = group.get("flex_period_id")
+            lunch_id = group.get("lunch_period_id")
+            if flex_id not in id_to_num or lunch_id not in id_to_num:
+                raise ValueError(
+                    f"Grade group '{group.get('id')}' references a period "
+                    f"id that isn't in the submitted bell schedule."
+                )
+            group_periods[group["id"]] = {
+                "flex": id_to_num[flex_id],
+                "lunch": id_to_num[lunch_id],
+            }
+            for grade in group.get("grades", []):
+                grade_groups[str(grade).strip().upper()] = group["id"]
+
+        blackout_ids = (config.pullout_constraints or {}).get("blackout_period_ids", [])
+        blackout_periods = {id_to_num[pid] for pid in blackout_ids if pid in id_to_num}
+
+        specials_defs = config.specials_requirements or []
+        specials_sessions_per_week = {
+            s["subject"]: s["sessions_per_week"] for s in specials_defs if s.get("subject")
+        }
+        specials_session_length_minutes = {
+            s["subject"]: s["session_length_minutes"] for s in specials_defs if s.get("subject")
+        }
+
+        return cls(
+            period_times=period_times,
+            periods=periods,
+            grade_groups=grade_groups,
+            group_periods=group_periods,
+            specials_sessions_per_week=specials_sessions_per_week or None,
+            specials_session_length_minutes=specials_session_length_minutes or None,
+            allow_specials_merge=(config.pullout_constraints or {}).get(
+                "allow_specials_merge", True
+            ),
+            blackout_periods=blackout_periods,
+            max_pullouts_per_day=(config.pullout_constraints or {}).get("max_pullouts_per_day"),
+            min_gap_minutes=(config.pullout_constraints or {}).get("min_gap_minutes", 0),
+        )
+    
     def get_group_for_grade(self, grade: Any) -> str:
         key = str(grade).strip().upper() if grade is not None else ""
         group = self.grade_groups.get(key)
@@ -351,45 +498,24 @@ def get_student_services(student: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     services = []
 
-    if student.get("has_iep"):
-        raw_services = student.get("iep_services") or []
+    db_services = student.get("services")
 
-        if raw_services:
-            for service in raw_services:
-                if isinstance(service, dict):
-                    service_type = (
-                        service.get("service_type")
-                        or service.get("type")
-                        or service.get("name")
-                        or "SETSS"
-                    )
-                    minutes = int(
-                        service.get("minutes_per_week")
-                        or service.get("minutes")
-                        or service.get("required_minutes")
-                        or 30
-                    )
-                else:
-                    service_type = str(service)
-                    minutes = 30
-
-                services.append({
-                    "subject": service_type,
-                    "service_type": service_type,
-                    "minutes": minutes,
-                    "is_pullout": False
-                })
-        else:
+    if db_services:
+        for service in db_services:
             services.append({
-                "subject": "IEP Support",
-                "service_type": "SETSS",
-                "minutes": 30,
-                "is_pullout": True
+                "subject": service.get("subject") or service.get("service_type") or "IEP Support",
+                "service_type": service.get("service_type") or "SETSS",
+                "minutes": int(service.get("minutes") or 30),
+                "is_pullout": bool(service.get("is_pullout", True)),
             })
+    elif student.get("has_iep"):
+        services.append({
+            "subject": "IEP Support",
+            "service_type": "SETSS",
+            "minutes": 30,
+            "is_pullout": True
+        })
 
-    # ENL is a mandated, individually-scheduled pullout service and
-    # must remain here regardless of anything done to the FLEX block
-    # above.
     enl_minutes = int(student.get("enl_minutes_required") or 0)
     if enl_minutes > 0:
         services.append({

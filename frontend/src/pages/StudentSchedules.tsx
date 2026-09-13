@@ -5,7 +5,7 @@ import { useAuth } from "../context/authContext";
 import RunSelector from "../components/RunSelector";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
-const PERIODS = [1, 2, 3, 4, 5, 6, 7];
+
 const SPECIALS_SUBJECTS = ["PE", "Music", "Art"];
 
 interface StaffMember {
@@ -108,7 +108,9 @@ export default function StudentSchedules() {
   const studentSchedule = entries.filter(
     (e) => e.student_id === selectedStudent
   );
-
+  const periods = Array.from(
+    new Set(entries.map((e) => Number(e.period)))
+  ).sort((a, b) => a - b);
   function getClass(day: string, period: number) {
     return studentSchedule.find(
       (e) => e.day_of_week === day && Number(e.period) === period
@@ -126,8 +128,8 @@ export default function StudentSchedules() {
   }
 
   return (
-    <div style={{ padding: "20px", fontFamily: "Arial" }}>
-      <h1 style={{ color: "#313131c7" }}>
+    <div style={{ padding: "28px 36px" }}>
+      <h1>
         {isTeacher ? "My Students' Schedules" : "Student Schedules"}
       </h1>
 
@@ -164,7 +166,7 @@ export default function StudentSchedules() {
         </thead>
 
         <tbody>
-          {PERIODS.map((period) => (
+          {periods.map((period) => (
             <tr key={period}>
               <td>{period}</td>
 
@@ -173,26 +175,27 @@ export default function StudentSchedules() {
                 const isEditing = editingCell?.id === item?.id;
 
                 const cellBackground = !item
-                ? "#ffffff"
+                ? "white"
                 : item.is_pullout
-                ? "#e78282"
+                ? "var(--green-100)"
                 : item.is_flex_period
-                ? "#58ee7d"
+                ? "var(--blue-100)"
                 : isLunchEntry(item)
-                ? "#fff3b0"   // light yellow
+                ? "var(--amber-100)"
                 : isSpecialsEntry(item)
-                ? "#a8d8f0"   // light blue
-                : "#f9fafb";
+                ? "#ece7f7"   // light violet
+                : "var(--bg-page)";
 
                 return (
                   <td
                     key={day}
                     style={{
                       background: cellBackground,
-                      color: "#000000",
+                      color: "var(--text-h)",
                       padding: "8px",
                       minHeight: "80px",
-                      border: "1px solid #ddd",
+                      border: "1px solid var(--border)",
+                      borderRadius: "8px",
                       cursor: isTeacher ? "default" : "pointer",
                     }}
                     onClick={() => {

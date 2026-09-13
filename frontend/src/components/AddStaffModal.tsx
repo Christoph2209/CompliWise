@@ -66,7 +66,7 @@ export default function AddStaffModal({ schoolId, onClose, onCreated }: AddStaff
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2 style={{ color: "#000000" }}>Add Staff Member</h2>
+          <h2>Add Staff Member</h2>
           <button className="modal-close" onClick={onClose} aria-label="Close">✕</button>
         </div>
 

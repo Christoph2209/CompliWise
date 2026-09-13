@@ -8,6 +8,7 @@ from dmscheduler_db import (
     School,
     Student,
     StaffMember,
+    StudentService,
     ScheduleRun,
     ScheduleEntry,
     ComplianceFlag,
@@ -42,6 +43,7 @@ def get_default_school(db):
 
 
 
+
 def get_students(
     active_only: bool = False,
     search: str | None = None,
@@ -53,37 +55,39 @@ def get_students(
     db = SessionLocal()
 
     try:
-
         query = db.query(Student)
-
 
         if search:
             query = query.filter(
                 (Student.first_name.ilike(f"%{search}%")) |
                 (Student.last_name.ilike(f"%{search}%"))
             )
-
-
         if grade:
-            query = query.filter(
-                Student.grade == grade
-            )
-
-
+            query = query.filter(Student.grade == grade)
         if iep is not None:
-            query = query.filter(
-                Student.has_iep == iep
-            )
-
-
+            query = query.filter(Student.has_iep == iep)
         if mtss_tier:
-            query = query.filter(
-                Student.mtss_tier == mtss_tier
-            )
-
+            query = query.filter(Student.mtss_tier == mtss_tier)
 
         students = query.all()
+        student_ids = [s.id for s in students]
 
+        # Pull every StudentService row for these students in one query
+        # and group by student_id, rather than N+1 querying per student.
+        services_by_student: dict = {}
+        if student_ids:
+            service_rows = (
+                db.query(StudentService)
+                .filter(StudentService.student_id.in_(student_ids))
+                .all()
+            )
+            for svc in service_rows:
+                services_by_student.setdefault(svc.student_id, []).append({
+                    "subject": svc.subject_area or svc.service_type,
+                    "service_type": svc.service_type,
+                    "minutes": svc.minutes_per_week,
+                    "is_pullout": svc.is_pullout,
+                })
 
         return [
             {
@@ -98,6 +102,8 @@ def get_students(
                 "enl_minutes_required": student.enl_minutes_required,
                 "mtss_tier": student.mtss_tier,
                 "status": "active",
+                "services": services_by_student.get(student.id, []),
+                "iep_services": services_by_student.get(student.id, []),
             }
             for student in students
         ]
@@ -164,6 +170,26 @@ def create_schedule_run(
     finally:
         db.close()
 
+def _build_student_index(db) -> Dict[str, "Student"]:
+    """Maps both external_student_id and str(UUID) to Student rows,
+    so a single dict lookup replicates _find_student_by_scheduler_id's
+    external-id-first, UUID-fallback matching without a query per call."""
+    index: Dict[str, Student] = {}
+    for student in db.query(Student).all():
+        if student.external_student_id:
+            index[student.external_student_id] = student
+        index[str(student.id)] = student
+    return index
+
+
+def _build_staff_index(db) -> Dict[str, "StaffMember"]:
+    """Maps the exact 'First Last'.strip() name to StaffMember, matching
+    _find_staff_by_name's matching logic without a full-table scan per call."""
+    index: Dict[str, StaffMember] = {}
+    for staff in db.query(StaffMember).all():
+        full_name = f"{staff.first_name} {staff.last_name}".strip()
+        index[full_name] = staff
+    return index
 
 def _find_student_by_scheduler_id(db, student_id: str):
     student = db.query(Student).filter(
@@ -181,18 +207,6 @@ def _find_student_by_scheduler_id(db, student_id: str):
         return None
 
 
-def _find_staff_by_name(db, teacher_name: str):
-    if not teacher_name:
-        return None
-
-    staff_members = db.query(StaffMember).all()
-
-    for staff in staff_members:
-        full_name = f"{staff.first_name} {staff.last_name}".strip()
-        if full_name == teacher_name:
-            return staff
-
-    return None
 
 def create_flex_group_students(
     flex_group_students: List[Dict[str, Any]],
@@ -205,8 +219,6 @@ def create_flex_group_students(
     try:
         run_uuid = uuid.UUID(run_id)
 
-        # Build a lookup of (name, day_of_week, period) -> FlexGroup.id
-        # for all flex groups that belong to this run.
         flex_groups_in_run = (
             db.query(FlexGroup)
             .filter(FlexGroup.run_id == run_uuid)
@@ -217,13 +229,13 @@ def create_flex_group_students(
             for fg in flex_groups_in_run
         }
 
-        saved = []
+        student_index = _build_student_index(db)
+
+        rows = []
         seen = set()  # guard against duplicates within this batch
 
         for row in flex_group_students:
-            student = _find_student_by_scheduler_id(
-                db, str(row.get("student_id"))
-            )
+            student = student_index.get(str(row.get("student_id")))
             if not student:
                 continue
 
@@ -240,15 +252,15 @@ def create_flex_group_students(
                 continue
             seen.add(dedup_key)
 
-            db.add(FlexGroupStudent(
+            rows.append(FlexGroupStudent(
                 id=uuid.uuid4(),
                 flex_group_id=flex_group_id,
                 student_id=student.id,
             ))
-            saved.append(dedup_key)
 
+        db.add_all(rows)
         db.commit()
-        return {"saved_count": len(saved), "run_id": run_id}
+        return {"saved_count": len(rows), "run_id": run_id}
     except Exception:
         db.rollback()
         raise
@@ -276,21 +288,21 @@ def create_schedule_entries(
 
         run_uuid = uuid.UUID(run_id)
 
-        saved = []
+        student_index = _build_student_index(db)
+        staff_index = _build_staff_index(db)
+
+        rows = []
 
         for entry in entries:
-            student = _find_student_by_scheduler_id(
-                db,
-                str(entry.get("student_id")),
-            )
+            student = student_index.get(str(entry.get("student_id")))
 
             if not student:
                 continue
 
             teacher_name = entry.get("teacher") or ""
-            staff = _find_staff_by_name(db, teacher_name)
+            staff = staff_index.get(teacher_name) if teacher_name else None
 
-            schedule_entry = ScheduleEntry(
+            rows.append(ScheduleEntry(
                 id=uuid.uuid4(),
                 school_id=school.id,
                 run_id=run_uuid,
@@ -316,15 +328,13 @@ def create_schedule_entries(
 
                 status="draft",
                 source="scheduler",
-            )
+            ))
 
-            db.add(schedule_entry)
-            saved.append(schedule_entry)
-
+        db.add_all(rows)
         db.commit()
 
         return {
-            "saved_count": len(saved),
+            "saved_count": len(rows),
             "run_id": run_id,
         }
 
@@ -343,6 +353,7 @@ def create_compliance_flags(
 
     try:
         school = get_default_school(db)
+        student_index = _build_student_index(db)
 
         if run_id is None:
             run_id = create_schedule_run(
@@ -353,18 +364,14 @@ def create_compliance_flags(
 
         run_uuid = uuid.UUID(run_id)
 
-        saved = []
+        rows = []
 
         for flag in flags:
             student = None
-
             if flag.get("student_id") and flag.get("student_id") != "multiple":
-                student = _find_student_by_scheduler_id(
-                    db,
-                    str(flag.get("student_id")),
-                )
+                student = student_index.get(str(flag.get("student_id")))
 
-            compliance_flag = ComplianceFlag(
+            rows.append(ComplianceFlag(
                 id=uuid.uuid4(),
                 school_id=school.id,
                 run_id=run_uuid,
@@ -381,15 +388,13 @@ def create_compliance_flags(
                 affected_period=flag.get("affected_period"),
 
                 status=flag.get("status") or "open",
-            )
+            ))
 
-            db.add(compliance_flag)
-            saved.append(compliance_flag)
-
+        db.add_all(rows)
         db.commit()
 
         return {
-            "saved_count": len(saved),
+            "saved_count": len(rows),
             "run_id": run_id,
         }
 
@@ -408,6 +413,7 @@ def create_flex_groups(
 
     try:
         school = get_default_school(db)
+        staff_index = _build_staff_index(db)
 
         if run_id is None:
             run_id = create_schedule_run(
@@ -422,7 +428,7 @@ def create_flex_groups(
 
         for group in groups:
             teacher_name = group.get("teacher") or ""
-            staff = _find_staff_by_name(db, teacher_name)
+            staff = staff_index.get(teacher_name) if teacher_name else None
 
             flex_group = FlexGroup(
                 id=uuid.uuid4(),
@@ -565,3 +571,51 @@ def delete_entity_many(entity_name: str, query: dict):
 
     finally:
         db.close()
+
+def get_student_services(student: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Mandated, individually-scheduled services only.
+
+    NOTE: FLEX for MTSS tier_2/tier_3 students is intentionally NOT
+    generated here. It's handled entirely by build_flex_groups() /
+    apply_flex_groups_to_schedule() in scheduler.py. Do not re-add a
+    FLEX block here.
+    """
+    services = []
+
+    db_services = student.get("services")
+
+    if db_services:
+        for service in db_services:
+            services.append({
+                "subject": service.get("subject") or service.get("service_type") or "IEP Support",
+                "service_type": service.get("service_type") or "SETSS",
+                "minutes": int(service.get("minutes") or 30),
+                "is_pullout": bool(service.get("is_pullout", True)),
+            })
+    elif student.get("has_iep"):
+        # IEP-flagged but no StudentService rows on file -- fall back
+        # to a generic placeholder so the student still gets SOME
+        # mandated-support slot, rather than silently getting nothing.
+        # This should shrink toward zero as real service data is
+        # entered/imported; a student hitting this branch is a sign
+        # their services still need to be entered.
+        services.append({
+            "subject": "IEP Support",
+            "service_type": "SETSS",
+            "minutes": 30,
+            "is_pullout": True
+        })
+
+    # ENL is a mandated, individually-scheduled pullout service and
+    # must remain here regardless of anything done to the block above.
+    enl_minutes = int(student.get("enl_minutes_required") or 0)
+    if enl_minutes > 0:
+        services.append({
+            "subject": "ENL",
+            "service_type": "ENL",
+            "minutes": enl_minutes,
+            "is_pullout": True
+        })
+
+    return services

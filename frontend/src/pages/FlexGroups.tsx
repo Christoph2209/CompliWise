@@ -111,15 +111,16 @@ export default function FlexGroups() {
                     width: "100%",
                     padding: "10px 14px",
                     marginBottom: "24px",
-                    borderRadius: "8px",
-                    border: "1px solid #ccc",
+                    borderRadius: "10px",
+                    border: "1.5px solid var(--border)",
                     fontSize: "15px",
+                    fontFamily: "var(--font-body)",
                     boxSizing: "border-box",
                 }}
             />
 
-            {loading && <p>Loading flex groups…</p>}
-            {error && <p style={{ color: "crimson" }}>{error}</p>}
+            {loading && <p style={{ color: "var(--text)" }}>Loading flex groups…</p>}
+            {error && <p style={{ color: "var(--red-500)" }}>{error}</p>}
 
             {!loading && !error && (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "20px" }}>
@@ -133,18 +134,19 @@ export default function FlexGroups() {
                                 if (e.key === "Enter" || e.key === " ") setSelectedGroup(group);
                             }}
                             style={{
-                                border: "1px solid #ccc",
-                                borderRadius: "12px",
+                                border: "1px solid var(--border)",
+                                borderRadius: "14px",
                                 padding: "20px",
                                 cursor: "pointer",
-                                background: "#f5f5f5",
+                                background: "white",
+                                boxShadow: "0 2px 10px rgba(20, 50, 35, 0.06)",
                             }}
                         >
-                            <h3>{group.name}</h3>
-                            <p>Teacher: {group.staff_name}</p>
-                            <p>{group.days.join(", ")} - Period {group.period}</p>
+                            <h3 style={{ color: "var(--text-h)" }}>{group.name}</h3>
+                            <p style={{ color: "var(--text)" }}>Teacher: {group.staff_name}</p>
+                            <p style={{ color: "var(--text)" }}>{group.days.join(", ")} - Period {group.period}</p>
                             {search && matchingStudents.length > 0 && (
-                                <p style={{ fontSize: "12px", color: "#888" }}>
+                                <p style={{ fontSize: "12px", color: "var(--text)" }}>
                                     Matching students: {matchingStudents.map(s => s.name).join(", ")}
                                 </p>
                             )}
@@ -159,7 +161,7 @@ export default function FlexGroups() {
                     style={{
                         position: "fixed",
                         inset: 0,
-                        background: "rgba(0,0,0,0.4)",
+                        background: "rgba(15, 30, 22, 0.5)",
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
@@ -172,23 +174,36 @@ export default function FlexGroups() {
                             width: "40%",
                             maxWidth: "500px",
                             background: "white",
-                            border: "1px solid black",
-                            borderRadius: "12px",
+                            borderRadius: "16px",
                             padding: "25px",
-                            boxShadow: "0 5px 20px #999",
-                            color: "#000000",
+                            boxShadow: "0 20px 50px rgba(15, 30, 22, 0.25)",
+                            color: "var(--text-h)",
                         }}
                     >
-                        <h2 style={{ color: "black" }}>{selectedGroup.name}</h2>
-                        <h3>Teacher</h3>
-                        <p>{selectedGroup.staff_name}</p>
-                        <h3>Students</h3>
-                        <ul>
+                        <h2>{selectedGroup.name}</h2>
+                        <h3 style={{ color: "var(--text-h)" }}>Teacher</h3>
+                        <p style={{ color: "var(--text)" }}>{selectedGroup.staff_name}</p>
+                        <h3 style={{ color: "var(--text-h)" }}>Students</h3>
+                        <ul style={{ color: "var(--text)" }}>
                             {selectedGroup.students?.map((student) => (
                                 <li key={student.id}>{student.name}</li>
                             ))}
                         </ul>
-                        <button onClick={() => setSelectedGroup(null)}>Close</button>
+                        <button
+                            onClick={() => setSelectedGroup(null)}
+                            style={{
+                                background: "var(--gradient-primary)",
+                                color: "white",
+                                border: "none",
+                                borderRadius: "10px",
+                                padding: "9px 18px",
+                                fontFamily: "var(--font-body)",
+                                fontWeight: 600,
+                                cursor: "pointer",
+                            }}
+                        >
+                            Close
+                        </button>
                     </div>
                 </div>
             )}

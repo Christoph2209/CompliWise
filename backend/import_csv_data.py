@@ -1,6 +1,7 @@
 # import_csv_data.py
 
 import csv
+import json
 import re
 import uuid
 from pathlib import Path
@@ -19,6 +20,18 @@ STUDENTS_CSV = "./data/Student_export.csv"
 STAFF_CSV = "./data/StaffMember_export.csv"  # change to workers.csv if needed
 
 PathLike = Union[str, Path]
+
+
+DEFAULT_SESSION_MINUTES = {
+    "OT": 30,
+    "PT": 30,
+    "Speech": 30,
+    "Counseling": 30,
+    "SETSS": 30,
+    "Psych": 30,
+}
+
+FREQ_PATTERN = re.compile(r"(\d+)\s*x")
 
 
 def yes_no(value):
@@ -278,84 +291,100 @@ def import_staff(db, school, csv_path: Optional[PathLike] = None) -> int:
     return count
 
 
-def import_student_services(db, school, csv_path: Optional[PathLike] = None) -> int:
+def _parse_sessions_per_week(frequency: str | None) -> int | None:
+    if not frequency:
+        return None
+    match = FREQ_PATTERN.search(frequency)
+    return int(match.group(1)) if match else None
+
+
+def import_student_services(db, school, csv_path):
     """
-    Optional helper if your student CSV has simple service columns.
+    Parses the `iep_services` JSON column from the student export CSV
+    and creates one StudentService row per service entry.
 
-    Expected optional columns:
-      service_type
-      service_minutes
-      service_sessions
-      service_is_pullout
-
-    For more complex IEP data, we should make a separate services.csv.
-
-    NOTE: not currently wired into the setup wizard's /setup/import-csv
-    endpoint -- that endpoint only calls import_students/import_staff.
-    Wire this in too (with its own file upload) once there's a real
-    services CSV format to test against.
+    IMPORTANT: the source data has no minutes_per_week, only a
+    frequency string ("2x/week"). This import fills minutes_per_week
+    with a placeholder default and flags every row as unverified --
+    these numbers must be reviewed against actual IEP paperwork before
+    they're trusted for compliance checks.
     """
-    path = Path(csv_path) if csv_path is not None else Path(STUDENTS_CSV)
+    created = 0
+    skipped_no_student = 0
+    skipped_bad_json = 0
 
-    if not path.exists():
-        return 0
-
-    count = 0
-
-    with path.open("r", encoding="utf-8-sig", newline="") as file:
-        reader = csv.DictReader(file)
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
 
         for row in reader:
-            external_student_id = clean(
-                row.get("student_id")
-                or row.get("id")
-                or row.get("external_student_id")
+            external_id = row.get("student_id")
+            if not external_id:
+                continue
+
+            student = (
+                db.query(Student)
+                .filter(
+                    Student.school_id == school.id,
+                    Student.external_student_id == external_id,
+                )
+                .first()
             )
-
-            service_type = clean(row.get("service_type"))
-            minutes = to_int(row.get("service_minutes"), default=0)
-
-            if not external_student_id or not service_type or minutes <= 0:
-                continue
-
-            student = db.query(Student).filter(
-                Student.school_id == school.id,
-                Student.external_student_id == external_student_id,
-            ).first()
-
             if not student:
+                skipped_no_student += 1
                 continue
 
-            existing = db.query(StudentService).filter(
-                StudentService.school_id == school.id,
-                StudentService.student_id == student.id,
-                StudentService.service_type == service_type,
-            ).first()
+            raw_services = row.get("iep_services") or "[]"
+            try:
+                services = json.loads(raw_services)
+            except json.JSONDecodeError:
+                skipped_bad_json += 1
+                continue
 
-            if existing:
-                service = existing
-            else:
-                service = StudentService(
-                    id=uuid.uuid4(),
+            for svc in services:
+                service_type = svc.get("service_type")
+                if not service_type:
+                    continue
+
+                frequency = svc.get("frequency")
+                sessions_per_week = _parse_sessions_per_week(frequency)
+                group_size = svc.get("group_size")
+                provider = svc.get("provider")
+
+                minutes_per_session = DEFAULT_SESSION_MINUTES.get(service_type, 30)
+                minutes_per_week = (
+                    minutes_per_session * sessions_per_week
+                    if sessions_per_week
+                    else minutes_per_session
+                )
+
+                note_parts = [
+                    "⚠️ NEEDS VERIFICATION — minutes are a placeholder default, "
+                    "confirm against actual IEP documentation."
+                ]
+                if provider:
+                    note_parts.append(f"Provider on file: {provider}")
+                if group_size:
+                    note_parts.append(f"Group size: {group_size}")
+
+                db.add(StudentService(
                     school_id=school.id,
                     student_id=student.id,
                     service_type=service_type,
-                    minutes_per_week=minutes,
-                )
-                db.add(service)
-
-            service.minutes_per_week = minutes
-            service.sessions_per_week = to_int(
-                row.get("service_sessions"),
-                default=max(1, round(minutes / 30)),
-            )
-            service.is_pullout = yes_no(row.get("service_is_pullout") or "yes")
-
-            count += 1
+                    subject_area=None,
+                    minutes_per_week=minutes_per_week,
+                    sessions_per_week=sessions_per_week,
+                    is_pullout=True,
+                    preferred_provider_id=None,
+                    notes=" | ".join(note_parts),
+                ))
+                created += 1
 
     db.commit()
-    print(f"Imported/updated {count} student services.")
-    return count
+    return {
+        "services_created": created,
+        "students_not_found": skipped_no_student,
+        "rows_with_bad_json": skipped_bad_json,
+    }
 
 
 def main():
