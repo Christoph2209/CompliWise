@@ -1,5 +1,8 @@
+import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/authContext";
+
+const SIDEBAR_COLLAPSED_KEY = "compliwise:sidebarCollapsed";
 
 type NavItem = {
   to: string;
@@ -70,6 +73,13 @@ const icons = {
       <path d="M4 17l8 4 8-4" />
     </Icon>
   ),
+  menu: (
+    <Icon>
+      <line x1="4" y1="7" x2="20" y2="7" />
+      <line x1="4" y1="12" x2="20" y2="12" />
+      <line x1="4" y1="17" x2="20" y2="17" />
+    </Icon>
+  ),
 };
 
 export default function AppLayout() {
@@ -77,6 +87,22 @@ export default function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const isAdminOrPrincipal = user?.role === "admin" || user?.role === "principal";
+
+  // Sidebar can be hidden entirely when someone wants the full screen for a
+  // dense page (the schedule grid, a wide table). Off by default; the choice
+  // is remembered per-browser so it sticks across visits.
+  const [collapsed, setCollapsed] = useState(
+    () => localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1"
+  );
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0");
+    } catch {
+      // localStorage can be unavailable (private browsing, disabled storage) --
+      // the toggle still works for the session, it just won't be remembered.
+    }
+  }, [collapsed]);
 
   function handleLogout() {
     logout();
@@ -96,39 +122,62 @@ export default function AppLayout() {
   return (
     <div style={styles.container}>
       {/* Sidebar */}
-      <aside style={styles.sidebar}>
-        <div style={styles.brand}>
-          <div style={styles.brandMark}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-              <path d="M9 11l3 3L22 4" />
-              <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
-            </svg>
+      <aside style={collapsed ? styles.sidebarCollapsed : styles.sidebar}>
+        <div style={styles.sidebarInner}>
+          <div style={styles.brand}>
+            <div style={styles.brandMark}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 11l3 3L22 4" />
+                <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+              </svg>
+            </div>
+            <span style={styles.brandName}>CompliWise</span>
+            <button
+              onClick={() => setCollapsed(true)}
+              aria-label="Hide menu"
+              title="Hide menu"
+              style={styles.collapseButton}
+            >
+              {icons.menu}
+            </button>
           </div>
-          <span style={styles.brandName}>CompliWise</span>
+
+          <nav style={styles.nav}>
+            {items
+              .filter((item) => item.show !== false)
+              .map((item) => {
+                const active = location.pathname === item.to;
+                return (
+                  <Link
+                    key={item.to}
+                    to={item.to}
+                    style={active ? { ...styles.link, ...styles.linkActive } : styles.link}
+                  >
+                    {item.icon}
+                    {item.label}
+                  </Link>
+                );
+              })}
+          </nav>
+
+          <button onClick={handleLogout} style={styles.logoutButton}>
+            Log out
+          </button>
         </div>
-
-        <nav style={styles.nav}>
-          {items
-            .filter((item) => item.show !== false)
-            .map((item) => {
-              const active = location.pathname === item.to;
-              return (
-                <Link
-                  key={item.to}
-                  to={item.to}
-                  style={active ? { ...styles.link, ...styles.linkActive } : styles.link}
-                >
-                  {item.icon}
-                  {item.label}
-                </Link>
-              );
-            })}
-        </nav>
-
-        <button onClick={handleLogout} style={styles.logoutButton}>
-          Log out
-        </button>
       </aside>
+
+      {/* Reopen button -- only rendered once the sidebar is hidden, since the
+          one inside the sidebar is clipped away along with everything else. */}
+      {collapsed && (
+        <button
+          onClick={() => setCollapsed(false)}
+          aria-label="Show menu"
+          title="Show menu"
+          style={styles.expandButton}
+        >
+          {icons.menu}
+        </button>
+      )}
 
       {/* Main Content */}
       <main style={styles.main}>
@@ -150,16 +199,64 @@ const styles: Record<string, React.CSSProperties> = {
     background: "var(--gradient-sidebar)",
     color: "white",
     padding: "24px 16px",
+    boxSizing: "border-box",
+    overflow: "hidden",
+    transition: "width 0.2s ease, padding 0.2s ease",
+  },
+  sidebarCollapsed: {
+    width: "0px",
+    flexShrink: 0,
+    background: "var(--gradient-sidebar)",
+    color: "white",
+    padding: "24px 0",
+    boxSizing: "border-box",
+    overflow: "hidden",
+    transition: "width 0.2s ease, padding 0.2s ease",
+  },
+  sidebarInner: {
+    width: "220px",
     display: "flex",
     flexDirection: "column",
     gap: "24px",
-    boxSizing: "border-box",
+    height: "100%",
   },
   brand: {
     display: "flex",
     alignItems: "center",
     gap: "11px",
     padding: "0 8px",
+  },
+  collapseButton: {
+    marginLeft: "auto",
+    width: "28px",
+    height: "28px",
+    flexShrink: 0,
+    background: "rgba(255,255,255,0.12)",
+    border: "none",
+    borderRadius: "8px",
+    color: "white",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    cursor: "pointer",
+    padding: 0,
+  },
+  expandButton: {
+    position: "fixed",
+    top: "24px",
+    left: "24px",
+    zIndex: 20,
+    width: "40px",
+    height: "40px",
+    background: "white",
+    border: "1px solid var(--border)",
+    borderRadius: "10px",
+    color: "var(--green-700)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    cursor: "pointer",
+    boxShadow: "0 2px 10px rgba(20, 50, 35, 0.12)",
   },
   brandMark: {
     width: "32px",
