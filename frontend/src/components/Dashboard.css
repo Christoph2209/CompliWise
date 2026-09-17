@@ -151,6 +151,24 @@
   border-left: 4px solid var(--amber-500);
 }
 
+/* Add to Dashboard.css */
+
+.alert-scroll-list {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.alert-item-clickable {
+  cursor: pointer;
+  transition: filter 0.1s ease;
+}
+
+.alert-item-clickable:hover,
+.alert-item-clickable:focus-visible {
+  filter: brightness(0.97);
+  outline: none;
+}
+
 .empty {
   color: var(--text);
   font-size: 13px;

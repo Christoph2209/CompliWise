@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getSchedule, updateScheduleEntry } from "../api/schedule";
 import { getStaff } from "../api/staff";
+import { cachedFetch, invalidateCache } from "../api/apiCache";
 import { useAuth } from "../context/authContext";
 import RunSelector from "../components/RunSelector";
 
@@ -51,14 +52,23 @@ export default function StudentSchedules() {
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
 
+  // Same run maps to the same cache entry no matter which page fetched it,
+  // so switching between Student/Staff schedule views for one run reuses
+  // the cached data instead of re-fetching.
+  const runKey = canCompareRuns ? selectedRunId ?? "default" : "default";
+
   useEffect(() => {
     // Teachers always see the current/default run; only admins/principals compare runs
     if (canCompareRuns && selectedRunId === null) return; // wait for RunSelector to set a default
 
     async function load() {
       const [scheduleData, staffData] = await Promise.all([
-        getSchedule(canCompareRuns ? selectedRunId! : undefined),
-        getStaff(),
+        cachedFetch(`schedule:${runKey}`, () =>
+          getSchedule(canCompareRuns ? selectedRunId! : undefined)
+        ),
+        // Staff lists change far less often than schedules, so keep them
+        // fresh for longer to avoid re-fetching on every page visit.
+        cachedFetch("staff:all", () => getStaff(), { staleMs: 5 * 60_000 }),
       ]);
 
       const allEntries: ScheduleEntry[] = scheduleData || [];
@@ -91,7 +101,7 @@ export default function StudentSchedules() {
     }
 
     load();
-  }, [isTeacher, myStaffId, canCompareRuns, selectedRunId]);
+  }, [isTeacher, myStaffId, canCompareRuns, selectedRunId, runKey]);
 
   const students = Array.from(
     new Map(
@@ -131,6 +141,11 @@ export default function StudentSchedules() {
     setEntries((prev) =>
       prev.map((e) => (e.id === updated.id ? updated : e))
     );
+
+    // The cached schedule for this run is now stale server-side — drop it
+    // so the next load (this page, TeacherSchedules, or the dashboard's
+    // own fetch) pulls fresh data instead of the pre-edit snapshot.
+    invalidateCache(`schedule:${runKey}`);
 
     setEditingCell(null);
   }

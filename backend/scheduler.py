@@ -957,8 +957,8 @@ def score_slot_for_service(
     if service_type == "enl" and period in {1, 2}:
         return 300
 
-    if period in period_config.core_periods(student):
-        return -1000
+    #if period in period_config.core_periods(student):
+        #return -1000
 
     return 0
 
