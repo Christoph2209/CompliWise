@@ -277,6 +277,65 @@ class PeriodConfig:
             return max(0, start_b - (start_a + dur_a))
         return max(0, start_a - (start_b + dur_b))
 
+    # -----------------------------------------------------------
+    # Human-readable period labels
+    #
+    # period_times is stored as bare 12-hour strings with no AM/PM
+    # marker (e.g. "8:10-8:55", "12:30-1:20"), so AM/PM has to be
+    # inferred from position in the day rather than read off directly.
+    # The walk below assumes a single continuous school day that starts
+    # in the morning and crosses noon at most once -- true for every
+    # bell schedule this app has handled so far.
+    #
+    # TODO: if PeriodConfig.from_config()'s frontend payload is ever
+    # changed to submit real 24-hour start_time/end_time values, this
+    # heuristic can be deleted in favor of a direct format() call --
+    # AM/PM would no longer be ambiguous at the source.
+    # -----------------------------------------------------------
+
+    def _compute_period_labels(self) -> Dict[int, str]:
+        labels: Dict[int, str] = {}
+        crossed_noon = False
+
+        for period in sorted(self.periods):
+            time_range = self.period_times.get(period)
+            if not time_range:
+                labels[period] = f"Period {period}"
+                continue
+            try:
+                start_str, _end_str = time_range.split("-")
+                hour_str, minute_str = start_str.split(":")
+                hour, minute = int(hour_str), int(minute_str)
+            except (ValueError, AttributeError):
+                labels[period] = f"Period {period}"
+                continue
+
+            if hour == 12:
+                crossed_noon = True
+                is_pm = True
+            elif hour <= 6 and crossed_noon:
+                is_pm = True
+            else:
+                is_pm = False
+
+            display_hour = 12 if hour == 0 else hour
+            labels[period] = f"{display_hour}:{minute:02d} {'PM' if is_pm else 'AM'}"
+
+        return labels
+
+    def period_label(self, period: int) -> str:
+        """Human-readable label for a period based on its start time,
+        e.g. "8:10 AM". Falls back to "Period {n}" if the period has no
+        configured time or the time string can't be parsed."""
+        return self._compute_period_labels().get(period, f"Period {period}")
+
+    @property
+    def period_labels(self) -> Dict[int, str]:
+        """Label for every configured period, keyed by period number --
+        handy for building a frontend period-selector without calling
+        period_label() once per period."""
+        return self._compute_period_labels()
+
     @classmethod
     def from_config(cls, config) -> "PeriodConfig":
         """

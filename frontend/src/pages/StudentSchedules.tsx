@@ -22,6 +22,7 @@ interface ScheduleEntry {
   grade: string;
   day_of_week: string;
   period: number;
+  period_label?: string;
   subject: string;
   staff_id?: string;
   staff_name?: string;
@@ -108,9 +109,16 @@ export default function StudentSchedules() {
   const studentSchedule = entries.filter(
     (e) => e.student_id === selectedStudent
   );
+  
   const periods = Array.from(
     new Set(entries.map((e) => Number(e.period)))
   ).sort((a, b) => a - b);
+
+  const periodLabels: Record<number, string> = {};
+  entries.forEach((e) => {
+    if (e.period_label) periodLabels[Number(e.period)] = e.period_label;
+  });
+
   function getClass(day: string, period: number) {
     return studentSchedule.find(
       (e) => e.day_of_week === day && Number(e.period) === period
@@ -168,7 +176,7 @@ export default function StudentSchedules() {
         <tbody>
           {periods.map((period) => (
             <tr key={period}>
-              <td>{period}</td>
+              <td>{periodLabels[period] ?? `Period ${period}`}</td>
 
               {DAYS.map((day) => {
                 const item = getClass(day, period);

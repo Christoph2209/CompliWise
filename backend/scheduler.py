@@ -529,6 +529,7 @@ def build_homeroom_core_schedule(
                         "student_id": student_id,
                         "day_of_week": day,
                         "period": period,
+                        "period_label": period_config.period_label(period),
                         "subject": subject,
                         "teacher": "" if is_lunch else teacher,
                         "room": "" if is_lunch else homeroom,
@@ -671,6 +672,7 @@ def build_specials_schedule(
                             "student_id": student.get("student_id"),
                             "day_of_week": day,
                             "period": period,
+                            "period_label": period_config.period_label(period),
                             "subject": f"{target_subject} - {homeroom}",
                             "teacher": teacher,
                             "room": homeroom,
@@ -710,6 +712,7 @@ def build_specials_schedule(
                                 "student_id": student.get("student_id"),
                                 "day_of_week": m_day,
                                 "period": m_period,
+                                "period_label": period_config.period_label(m_period),
                                 "subject": f"{target_subject} - {homeroom}",
                                 "teacher": m_teacher,
                                 "room": m_room,
@@ -903,6 +906,7 @@ def build_flex_groups(students, staff_members, period_config: PeriodConfig, sche
                         "max_group_size": max_size,
                         "day_of_week": day,
                         "period": flex_period,
+                        "period_label": period_config.period_label(flex_period),
                         "status": "active",
                         "group_number": group_number,
                     })
@@ -1217,6 +1221,7 @@ def apply_flex_groups_to_schedule(all_entries, flex_groups, students_by_id, sche
                 "student_id": student_id,
                 "day_of_week": day,
                 "period": period,
+                "period_label": group.get("period_label", ""),
                 "subject": subject,
                 "teacher": teacher,
                 "room": "",
@@ -1426,6 +1431,7 @@ def schedule_iep_services_first(
                         "student_id": student_id,
                         "day_of_week": day,
                         "period": period,
+                        "period_label": period_config.period_label(period),
                         "subject": subject,
                         "teacher": teacher,
                         "room": "",
@@ -1596,6 +1602,7 @@ def schedule_iep_services_first(
                 "teacher": group["teacher"],
                 "day_of_week": group["day_of_week"],
                 "period": group["period"],
+                "period_label": group.get("period_label", ""),
             })
 
     flex_conflict_flags = apply_flex_groups_to_schedule(
@@ -1682,6 +1689,7 @@ def schedule_iep_services_first(
                 {
                     "day_of_week": entry["day_of_week"],
                     "period": entry["period"],
+                    "period_label": entry.get("period_label", ""),
                     "subject": entry["subject"],
                     "teacher": entry["teacher"],
                     "service_type": entry["service_type"],
@@ -1724,6 +1732,7 @@ def schedule_iep_services_first(
         "staff_schedule": staff_schedule,
         "period_config": {
             "period_times": period_config.period_times,
+            "period_labels": period_config.period_labels,
             "grade_groups": period_config.grade_groups,
             "group_periods": period_config.group_periods,
             "specials_titles": period_config.specials_titles,

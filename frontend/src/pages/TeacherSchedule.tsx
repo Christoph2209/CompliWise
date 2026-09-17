@@ -45,6 +45,11 @@ export default function TeacherSchedules() {
   ).values()
 );
 
+const periodLabels: Record<number, string> = {};
+  entries.forEach((e) => {
+    if (e.period_label) periodLabels[Number(e.period)] = e.period_label;
+});
+
   const teacherSchedule = entries.filter(
     (entry) => entry.staff_id === selectedTeacher
   );
@@ -118,7 +123,7 @@ function getStudentCount(day: string, period: number) {
             {PERIODS.map((period) => (
               <tr key={period}>
                 <td style={{ fontWeight: "bold", textAlign: "center" }}>
-                  {period}
+                  {periodLabels[period] ?? `Period ${period}`}
                 </td>
 
                 {DAYS.map((day) => {

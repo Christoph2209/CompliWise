@@ -3,6 +3,7 @@ import{ useMemo } from "react";
 type ScheduleEntry = {
   day_of_week: string;
   period: number | string;
+  period_label?: string;
   subject?: string;
   service_type?: string;
   staff_id?: string;
@@ -81,7 +82,7 @@ if (!selectedSlot) {
           <h2 style={{ margin: 0 }}>{selectedSlot.subject || "Class"}</h2>
 
           <p style={{ margin: "5px 0", color: "var(--text)" }}>
-            {selectedSlot.day_of_week} • Period {selectedSlot.period}
+            {selectedSlot.day_of_week} • {selectedSlot.period_label || `Period ${selectedSlot.period}`}
           </p>
 
           {selectedSlot.service_type && (
