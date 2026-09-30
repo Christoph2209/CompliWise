@@ -250,6 +250,7 @@ class ScheduleEntry(Base):
 
     day_of_week: Mapped[str] = mapped_column(String(20), nullable=False)
     period: Mapped[int] = mapped_column(Integer, nullable=False)
+    period_label: Mapped[Optional[str]] = mapped_column(String(20))
 
     subject: Mapped[str] = mapped_column(String(255), nullable=False)
     room: Mapped[Optional[str]] = mapped_column(String(100))
@@ -334,6 +335,7 @@ class FlexGroup(Base):
 
     day_of_week: Mapped[Optional[str]] = mapped_column(String(20))
     period: Mapped[Optional[int]] = mapped_column(Integer)
+    period_label: Mapped[Optional[str]] = mapped_column(String(20))
 
     max_group_size: Mapped[int] = mapped_column(Integer, default=10)
     status: Mapped[str] = mapped_column(String(50), default="active")
@@ -465,4 +467,3 @@ class AuditLog(Base):
 
     ip_address: Mapped[Optional[str]] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-

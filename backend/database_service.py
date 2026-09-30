@@ -318,6 +318,7 @@ def create_schedule_entries(
 
                 day_of_week=entry.get("day_of_week"),
                 period=int(entry.get("period")),
+                period_label=entry.get("period_label") or None,
 
                 subject=entry.get("subject") or "General Education",
                 room=entry.get("room") or "",
@@ -444,6 +445,7 @@ def create_flex_groups(
 
                 day_of_week=group.get("day_of_week"),
                 period=int(group.get("period")) if group.get("period") else None,
+                period_label=group.get("period_label") or None,
 
                 max_group_size=int(group.get("max_group_size") or 10),
                 status=group.get("status") or "active",
@@ -478,6 +480,7 @@ def get_schedule_entries() -> List[Dict[str, Any]]:
                 "grade": entry.grade,
                 "day_of_week": entry.day_of_week,
                 "period": entry.period,
+                "period_label": entry.period_label,
                 "subject": entry.subject,
                 "teacher": entry.teacher_name,
                 "room": entry.room,
@@ -514,6 +517,7 @@ def get_flex_groups(active_only: bool = True) -> List[Dict[str, Any]]:
                 "teacher": group.teacher_name,
                 "day_of_week": group.day_of_week,
                 "period": group.period,
+                "period_label": group.period_label,
                 "max_group_size": group.max_group_size,
                 "status": group.status,
             }

@@ -1,6 +1,12 @@
 import { useState } from "react";
 import "./StudentEditor.css";
 
+interface IepService {
+  service_type: string;
+  sessions_per_week: number | null;
+  minutes_per_session: number | null;
+}
+
 interface Props {
   student: any;
   setStudent: (student: any) => void;
@@ -8,6 +14,15 @@ interface Props {
   onCancel: () => void;
   readOnly?: boolean;
 }
+
+const SERVICE_TYPES = [
+  "OT",
+  "PT",
+  "Speech",
+  "SETSS",
+  "ICT",
+  "Counseling",
+];
 
 export default function StudentEditor({
   student,
@@ -27,6 +42,32 @@ export default function StudentEditor({
     });
   }
 
+  const iepServices: IepService[] = student.iep_services ?? [];
+
+  function updateService(index: number, field: keyof IepService, value: any) {
+    const next = iepServices.map((svc, i) =>
+      i === index ? { ...svc, [field]: value } : svc
+    );
+    update("iep_services", next);
+  }
+
+  function addService() {
+    const next = [
+      ...iepServices,
+      {
+        service_type: SERVICE_TYPES[0],
+        sessions_per_week: null,
+        minutes_per_session: null,
+      },
+    ];
+    update("iep_services", next);
+  }
+
+  function removeService(index: number) {
+    const next = iepServices.filter((_, i) => i !== index);
+    update("iep_services", next);
+  }
+
   async function handleSave() {
     setSaveError(null);
     setIsSaving(true);
@@ -35,7 +76,7 @@ export default function StudentEditor({
     } catch (err) {
       console.error("Error saving student:", err);
       setSaveError(
-        "Couldn't save this student. Double check Grade and MTSS Tier are valid values."
+        "Couldn't save this student. Double check Grade, MTSS Tier, and IEP service values are valid."
       );
     } finally {
       setIsSaving(false);
@@ -135,6 +176,94 @@ export default function StudentEditor({
               />
             </div>
           </fieldset>
+
+          {student.has_iep && (
+            <fieldset className="field-group">
+              <legend>IEP Services</legend>
+
+              {iepServices.length === 0 && (
+                <p className="iep-services-empty">
+                  No mandated services added yet.
+                </p>
+              )}
+
+              {iepServices.map((svc, index) => (
+                <div className="iep-service-row" key={index}>
+                  <div className="field-row">
+                    <label htmlFor={`service_type_${index}`}>Service</label>
+                    <select
+                      id={`service_type_${index}`}
+                      value={svc.service_type}
+                      onChange={(e) =>
+                        updateService(index, "service_type", e.target.value)
+                      }
+                    >
+                      {SERVICE_TYPES.map((type) => (
+                        <option key={type} value={type}>
+                          {type}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="field-row">
+                    <label htmlFor={`sessions_per_week_${index}`}>
+                      Sessions / Week
+                    </label>
+                    <input
+                      id={`sessions_per_week_${index}`}
+                      type="number"
+                      min={0}
+                      value={svc.sessions_per_week ?? ""}
+                      onChange={(e) =>
+                        updateService(
+                          index,
+                          "sessions_per_week",
+                          e.target.value === "" ? null : Number(e.target.value)
+                        )
+                      }
+                    />
+                  </div>
+
+                  <div className="field-row">
+                    <label htmlFor={`minutes_per_session_${index}`}>
+                      Minutes / Session
+                    </label>
+                    <input
+                      id={`minutes_per_session_${index}`}
+                      type="number"
+                      min={0}
+                      value={svc.minutes_per_session ?? ""}
+                      onChange={(e) =>
+                        updateService(
+                          index,
+                          "minutes_per_session",
+                          e.target.value === "" ? null : Number(e.target.value)
+                        )
+                      }
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    className="remove-service-btn"
+                    onClick={() => removeService(index)}
+                    aria-label={`Remove ${svc.service_type} service`}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+
+              <button
+                type="button"
+                className="add-service-btn"
+                onClick={addService}
+              >
+                + Add Service
+              </button>
+            </fieldset>
+          )}
 
           <fieldset className="field-group">
             <legend>ENL</legend>

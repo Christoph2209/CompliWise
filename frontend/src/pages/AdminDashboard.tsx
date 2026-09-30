@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { getStudents } from "../api/students";
-import { getStaff } from "../api/staff";
-import { getSchedule } from "../api/schedule";
-import { getComplianceFlags, runComplianceCheck } from "../api/compliance";
+import { useNavigate } from "react-router-dom";
 import { resetSchedule } from "../api/schedule";
+import { loadDashboard, invalidateDashboard } from "../api/dashboardCache";
+import { invalidateCache } from "../api/apiCache";
 import { useAuth } from "../context/authContext";
+import { runComplianceCheck } from "../api/compliance";
 import GenerateScheduleModal from "../components/GenerateScheduleModal";
 import AddStaffModal from "../components/AddStaffModal";
 import AddUserModal from "../components/AddUserModal";
@@ -16,6 +16,7 @@ export default function Dashboard() {
   const [schedule, setSchedule] = useState<any[]>([]);
   const [flags, setFlags] = useState<any[]>([]);
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [showAddUser, setShowAddUser] = useState(false);
   const [showAddStaff, setShowAddStaff] = useState(false);
   const [showGenerateSchedule, setShowGenerateSchedule] = useState(false);
@@ -32,18 +33,24 @@ export default function Dashboard() {
     load();
   }, []);
 
-  async function load() {
-    const [s1, s2, s3, s4] = await Promise.all([
-      getStudents(),
-      getStaff(),
-      getSchedule(),
-      getComplianceFlags(),
-    ]);
+  // force=true bypasses the cache and hits the API again (Refresh button,
+  // and anywhere data was just mutated). force=false (default) serves the
+  // cached dashboard instantly if it's still fresh, so revisiting this page
+  // doesn't re-fetch everything every time.
+  async function load(force = false) {
+    const data = await loadDashboard(force);
+    setStudents(data.students);
+    setStaff(data.staff);
+    setSchedule(data.schedule);
+    setFlags(data.flags);
+  }
 
-    setStudents(s1 || []);
-    setStaff(s2 || []);
-    setSchedule(s3 || []);
-    setFlags(s4 || []);
+  // Call this instead of load() directly after anything that mutates
+  // students/staff/schedule/flags server-side, so the next load() actually
+  // refetches instead of silently reusing stale cached data.
+  async function reloadAfterMutation() {
+    invalidateDashboard();
+    await load();
   }
 
   async function handleRunComplianceCheck() {
@@ -87,7 +94,7 @@ export default function Dashboard() {
         )}
       </div>
         <div className="actions">
-          <button>🔄 Refresh</button>
+          <button onClick={() => load(true)}>🔄 Refresh</button>
           <button onClick={() => setShowGenerateSchedule(true)}>
             ⚙️ Generate Schedule
           </button>
@@ -95,7 +102,11 @@ export default function Dashboard() {
             try {
               await resetSchedule();
               alert("Schedule reset successfully!");
-              await load();
+              // Reset wipes the schedule for every run, so clear the whole
+              // shared cache (StudentSchedules/TeacherSchedules included)
+              // rather than just this page's own cached bundle.
+              invalidateCache();
+              await reloadAfterMutation();
             } catch (error) {
               console.error("Error resetting schedule:", error);
             }
@@ -138,12 +149,23 @@ export default function Dashboard() {
           {critical.length === 0 ? (
             <p className="empty">No critical issues 🎉</p>
           ) : (
-            critical.slice(0, 6).map((f, i) => (
-              <div key={i} className="alert-item critical">
-                <strong>{f.student_name || f.studentName}</strong>
-                <p>{f.description || f.message}</p>
-              </div>
-            ))
+            <div className="alert-scroll-list">
+              {critical.map((f, i) => (
+                <div
+                  key={i}
+                  className="alert-item critical alert-item-clickable"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => navigate("/compliance")}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") navigate("/compliance");
+                  }}
+                >
+                  <strong>{f.student_name || f.studentName}</strong>
+                  <p>{f.description || f.message}</p>
+                </div>
+              ))}
+            </div>
           )}
         </div>
 
@@ -153,12 +175,23 @@ export default function Dashboard() {
           {warnings.length === 0 ? (
             <p className="empty">No warnings</p>
           ) : (
-            warnings.slice(0, 6).map((f, i) => (
-              <div key={i} className="alert-item warning">
-                <strong>{f.student_name || f.studentName}</strong>
-                <p>{f.description || f.message}</p>
-              </div>
-            ))
+            <div className="alert-scroll-list">
+              {warnings.map((f, i) => (
+                <div
+                  key={i}
+                  className="alert-item warning alert-item-clickable"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => navigate("/compliance")}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") navigate("/compliance");
+                  }}
+                >
+                  <strong>{f.student_name || f.studentName}</strong>
+                  <p>{f.description || f.message}</p>
+                </div>
+              ))}
+            </div>
           )}
         </div>
 
@@ -240,20 +273,20 @@ export default function Dashboard() {
         <AddStaffModal
           schoolId={user?.school_id || ""}
           onClose={() => setShowAddStaff(false)}
-          onCreated={load}
+          onCreated={reloadAfterMutation}
         />
       )}
       {showAddUser && (
         <AddUserModal
           schoolId={user?.school_id || ""}
           onClose={() => setShowAddUser(false)}
-          onCreated={load}
+          onCreated={reloadAfterMutation}
         />
       )}
       {showGenerateSchedule && (
         <GenerateScheduleModal
           onClose={() => setShowGenerateSchedule(false)}
-          onGenerated={load}
+          onGenerated={reloadAfterMutation}
         />
       )}
     </div>

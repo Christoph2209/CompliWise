@@ -474,6 +474,7 @@ def get_student_schedule(student_id: str):
                 "id": str(e.id),
                 "day_of_week": e.day_of_week,
                 "period": e.period,
+                "period_label": e.period_label,
                 "subject": e.subject,
                 "teacher": e.teacher_name,
                 "service_type": e.service_type,
@@ -518,6 +519,7 @@ def get_my_students(user: User = Depends(get_current_user), db: Session = Depend
             classes[key] = {
                 "day_of_week": entry.day_of_week,
                 "period": entry.period,
+                "period_label": entry.period_label,
                 "subject": entry.subject,
                 "service_type": entry.service_type,
                 "is_pullout": entry.is_pullout,
@@ -848,6 +850,7 @@ def my_schedule(user: User = Depends(get_current_user), db: Session = Depends(ge
             "id": str(e.id),
             "day_of_week": e.day_of_week,
             "period": e.period,
+            "period_label": e.period_label,
             "subject": e.subject,
             "student_name": e.student_name,
             "service_type": e.service_type,
@@ -889,6 +892,7 @@ def list_schedule_entries(run_id: str | None = None):
                 "staff_name": (f"{staff.first_name} {staff.last_name}" if staff else entry.teacher_name),
                 "day_of_week": entry.day_of_week,
                 "period": entry.period,
+                "period_label": entry.period_label,
                 "subject": entry.subject,
                 "service_type": entry.service_type,
                 "is_pullout": entry.is_pullout,
@@ -1047,6 +1051,7 @@ def get_schedule_run(run_id: str, user: User = Depends(get_current_user)):
                     "staff_name": (f"{staff.first_name} {staff.last_name}" if staff else entry.teacher_name),
                     "day_of_week": entry.day_of_week,
                     "period": entry.period,
+                    "period_label": entry.period_label,
                     "subject": entry.subject,
                     "service_type": entry.service_type,
                     "is_pullout": entry.is_pullout,
@@ -1310,9 +1315,26 @@ def list_compliance_flags():
 
         student_map = {str(s.id): f"{s.first_name} {s.last_name}" for s in students}
 
+        # get schedule runs in one go, so people can tell which run a flag came from
+        run_ids = [f.run_id for f in flags if f.run_id]
+
+        runs = db.query(ScheduleRun).filter(ScheduleRun.id.in_(run_ids)).all()
+
+        run_map = {
+            str(r.id): {
+                "name": r.name,
+                "status": r.status,
+                "school_year": r.school_year,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in runs
+        }
+
         return [
             {
                 "id": str(f.id),
+                "run_id": str(f.run_id),
+                "run": run_map.get(str(f.run_id)),
                 "student_name": student_map.get(str(f.student_id), "Unknown Student"),
                 "flag_type": f.flag_type,
                 "severity": f.severity,
@@ -1492,6 +1514,7 @@ def list_flex_groups():
                 "staff_name": fg.teacher_name,
                 "day_of_week": fg.day_of_week,
                 "period": fg.period,
+                "period_label": fg.period_label,
                 "student_id": str(s.id),
                 "student_name": f"{s.first_name} {s.last_name}".strip(),
             }

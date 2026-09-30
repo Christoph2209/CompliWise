@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getSchedule } from "../api/schedule";
+import { cachedFetch } from "../api/apiCache";
 import StudentModal from "../components/StudentModal";
 import RunSelector from "../components/RunSelector";
 import { useAuth } from "../context/authContext";
@@ -16,11 +17,19 @@ export default function TeacherSchedules() {
   const [selectedSlot, setSelectedSlot] = useState<any>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
 
+  // Same cache key format as StudentSchedules — the two pages fetch the
+  // same underlying schedule for a run, so this reuses that entry instead
+  // of firing a second identical request when the user switches pages.
+  const runKey = canCompareRuns ? selectedRunId ?? "default" : "default";
+
   useEffect(() => {
     if (canCompareRuns && selectedRunId === null) return;
 
     async function load() {
-      const data = (await getSchedule(canCompareRuns ? selectedRunId! : undefined)) || [];
+      const data =
+        (await cachedFetch(`schedule:${runKey}`, () =>
+          getSchedule(canCompareRuns ? selectedRunId! : undefined)
+        )) || [];
       setEntries(data);
 
       if (data.length > 0) {
@@ -29,7 +38,7 @@ export default function TeacherSchedules() {
     }
 
     load();
-  }, [canCompareRuns, selectedRunId]);
+  }, [canCompareRuns, selectedRunId, runKey]);
   // Build staff list
  const staff = Array.from(
   new Map(
@@ -44,6 +53,11 @@ export default function TeacherSchedules() {
       ])
   ).values()
 );
+
+const periodLabels: Record<number, string> = {};
+  entries.forEach((e) => {
+    if (e.period_label) periodLabels[Number(e.period)] = e.period_label;
+});
 
   const teacherSchedule = entries.filter(
     (entry) => entry.staff_id === selectedTeacher
@@ -118,7 +132,7 @@ function getStudentCount(day: string, period: number) {
             {PERIODS.map((period) => (
               <tr key={period}>
                 <td style={{ fontWeight: "bold", textAlign: "center" }}>
-                  {period}
+                  {periodLabels[period] ?? `Period ${period}`}
                 </td>
 
                 {DAYS.map((day) => {

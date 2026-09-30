@@ -50,6 +50,32 @@ export default function CompliancePage() {
     return "var(--green-100)";
   };
 
+  // Turn a joined schedule_runs record into a human-readable label.
+  // `name` is often reused across runs (e.g. every draft called "Full School
+  // Schedule"), so always include a short timestamp to disambiguate runs —
+  // don't rely on name alone or on the hover tooltip to tell two runs apart.
+  function formatRunLabel(run: any) {
+    if (!run) return "Unknown run";
+    const label = run.name || "Unnamed run";
+    if (!run.created_at) return label;
+    const d = new Date(run.created_at);
+    const stamp = d.toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    return `${label} · ${stamp}`;
+  }
+
+  function formatRunTooltip(issue: any) {
+    const run = issue.run;
+    const parts = [`Run ID: ${issue.run_id}`];
+    if (run?.school_year) parts.push(`School year: ${run.school_year}`);
+    if (run?.created_at) parts.push(`Created: ${new Date(run.created_at).toLocaleString()}`);
+    return parts.join("\n");
+  }
+
   return (
     <div style={{ padding: "28px 36px" }}>
       <h1>Compliance Dashboard</h1>
@@ -72,6 +98,7 @@ export default function CompliancePage() {
         <table style={{ width: "100%", borderSpacing: "0 10px" }}>
           <thead>
             <tr>
+              <th align="left">Run</th>
               <th align="left">Student</th>
               <th align="left">Type</th>
               <th align="left">Issue</th>
@@ -83,18 +110,45 @@ export default function CompliancePage() {
             {issues.map((issue) => (
               <tr
                 key={issue.id}
-                style={{ background: getColor(issue.severity || issue.type) }}
+                style={{ background: getColor(issue.severity || issue.flag_type) }}
               >
+                <td
+                  style={{ padding: "10px", color: "var(--text-h)" }}
+                  title={formatRunTooltip(issue)}
+                >
+                  {formatRunLabel(issue.run)}
+                  {issue.run?.status && (
+                    <span
+                      style={{
+                        marginLeft: "6px",
+                        fontSize: "0.75em",
+                        padding: "2px 6px",
+                        borderRadius: "6px",
+                        background: issue.run.status === "published" ? "var(--green-100)" : "var(--amber-100)",
+                      }}
+                    >
+                      {issue.run.status}
+                    </span>
+                  )}
+                </td>
+
                 <td style={{ padding: "10px", color: "var(--text-h)" }}>
                   {issue.student_name}
                 </td>
 
                 <td style={{ padding: "10px", color: "var(--text-h)" }}>
-                  {(issue.severity || issue.type)?.toUpperCase()}
+                  {(issue.severity || issue.flag_type)?.toUpperCase()}
                 </td>
 
                 <td style={{ padding: "10px", color: "var(--text-h)" }}>
-                  {issue.description || issue.message}
+                  {issue.title ? (
+                    <>
+                      <strong>{issue.title}</strong>
+                      {issue.description ? ` — ${issue.description}` : ""}
+                    </>
+                  ) : (
+                    issue.description
+                  )}
                 </td>
 
                 <td style={{ padding: "10px" }}>

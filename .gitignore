@@ -26,7 +26,6 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-alembic.ini
 
 # PyInstaller
 #   Usually these files are written by a python script from a template
