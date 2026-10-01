@@ -5,13 +5,15 @@ import {
   getScheduleConfigDefaults,
   type ScheduleJobStatus,
 } from "../api/schedule";
+import { CYCLE_DAYS, dayLabel, type CycleDay } from "../cycleDays";
 import "./GenerateScheduleModal.css";
 
 // ---------- Types ----------
 // Mirrors PeriodConfig.from_config() in scheduling_core.py.
 
-export const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"] as const;
-export type Weekday = (typeof WEEKDAYS)[number];
+// Cycle days (A-E), not calendar weekdays.
+export const WEEKDAYS = CYCLE_DAYS;
+export type Weekday = CycleDay;
 
 export type BlockRole = "homeroom" | "flex" | "specials" | "none";
 
@@ -73,11 +75,11 @@ interface GenerateScheduleModalProps {
 // ---------- Constants ----------
 
 const DAY_SHORT: Record<Weekday, string> = {
-  Monday: "M",
-  Tuesday: "T",
-  Wednesday: "W",
-  Thursday: "Th",
-  Friday: "F",
+  A: "A",
+  B: "B",
+  C: "C",
+  D: "D",
+  E: "E",
 };
 
 const ROLE_LABELS: Record<BlockRole, string> = {
@@ -150,7 +152,7 @@ function findOverlap(grade: EditableGrade): string | null {
       const curr = todays[i];
       if (toMinutes(curr.start_time) < toMinutes(prev.end_time)) {
         return (
-          `Grade ${grade.grade} on ${day}: ${prev.subject} ` +
+          `Grade ${grade.grade} on ${dayLabel(day)}: ${prev.subject} ` +
           `(${formatClock(prev.start_time)}-${formatClock(prev.end_time)}) overlaps ` +
           `${curr.subject} (${formatClock(curr.start_time)}-${formatClock(curr.end_time)}).`
         );
@@ -667,7 +669,7 @@ export default function GenerateScheduleModal({ onClose, onGenerated }: Generate
                           <span>Subject</span>
                           <span>Start</span>
                           <span>End</span>
-                          <span>Days</span>
+                          <span>Cycle days</span>
                           <span></span>
                         </div>
                         {currentGrade.blocks.map((b) => (
@@ -703,7 +705,7 @@ export default function GenerateScheduleModal({ onClose, onGenerated }: Generate
                                   key={day}
                                   className={`gsm-day-chip${b.days.includes(day) ? " on" : ""}`}
                                   aria-pressed={b.days.includes(day)}
-                                  aria-label={day}
+                                  aria-label={dayLabel(day)}
                                   onClick={() => toggleBlockDay(currentGrade.grade, b.id, day)}
                                 >
                                   {DAY_SHORT[day]}

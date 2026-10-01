@@ -31,6 +31,7 @@ from database_service import (
     create_flex_groups,
     create_schedule_entries,
     create_schedule_run,
+    create_staff_schedule_entries,
     delete_entity_many,
     get_staff,
     get_students,
@@ -40,6 +41,7 @@ from dmscheduler_db import (
     FlexGroup,
     FlexGroupStudent,
     ScheduleEntry,
+    StaffScheduleEntry,
     SessionLocal,
     School,
     StaffMember,
@@ -50,8 +52,8 @@ from dmscheduler_db import (
     AuditLog,
 )
 from datetime import datetime, timezone
-from scheduler import DAYS, schedule_iep_services_first, suggest_service_slots
-from scheduling_core import PeriodConfig, format_range
+from scheduler import schedule_iep_services_first, suggest_service_slots
+from scheduling_core import PeriodConfig, day_index, format_range
 # ---------------------------------------------------------------------------
 # App setup
 # ---------------------------------------------------------------------------
@@ -684,7 +686,7 @@ def get_my_students(user: User = Depends(get_current_user), db: Session = Depend
 
     return sorted(
         classes,
-        key=lambda c: (DAYS.index(c["day_of_week"]), c["start_minute"]),
+        key=lambda c: (day_index(c["day_of_week"]), c["start_minute"]),
     )
 
 
@@ -1202,6 +1204,64 @@ def update_schedule_entry(
         db.close()
 
 
+@app.get("/staff-schedule")
+def list_staff_schedule_entries(
+    run_id: str | None = None,
+    staff_id: str | None = None,
+    user: User = Depends(get_current_user),
+):
+    """Saved teacher schedules: one row per teacher per class/session,
+    including prep and lunch. Defaults to the latest full run. Teachers
+    only ever get their own rows."""
+    db = SessionLocal()
+    try:
+        if user.role not in ("admin", "principal"):
+            if not user.staff_id:
+                raise HTTPException(status_code=400, detail="Account is not linked to a staff member")
+            staff_id = str(user.staff_id)
+
+        try:
+            if run_id:
+                run_uuid = UUID(run_id)
+            else:
+                run = _latest_full_run(db)
+                if not run:
+                    return []
+                run_uuid = run.id
+            staff_uuid = UUID(staff_id) if staff_id else None
+        except ValueError:
+            raise HTTPException(status_code=400, detail="run_id / staff_id is not a valid id")
+
+        query = db.query(StaffScheduleEntry).filter(StaffScheduleEntry.run_id == run_uuid)
+        if staff_uuid:
+            query = query.filter(StaffScheduleEntry.staff_id == staff_uuid)
+
+        entries = query.all()
+        entries.sort(key=lambda e: (e.teacher_name or "", day_index(e.day_of_week), e.start_minute))
+
+        return [
+            {
+                "id": str(e.id),
+                "run_id": str(e.run_id),
+                "staff_id": str(e.staff_id) if e.staff_id else None,
+                "staff_name": e.teacher_name,
+                "day_of_week": e.day_of_week,
+                "period": e.period,
+                "period_label": e.period_label,
+                "subject": e.subject,
+                "grade": e.grade,
+                "service_type": e.service_type,
+                "is_pullout": e.is_pullout,
+                "is_flex_period": e.is_flex_period,
+                "student_count": e.student_count,
+                **_entry_time_fields(e),
+            }
+            for e in entries
+        ]
+    finally:
+        db.close()
+
+
 @app.get("/preview-priority")
 def preview_priority():
     """Calculate student scheduling priority order. Does not save schedule changes."""
@@ -1244,8 +1304,10 @@ def get_schedule_config_defaults(user: User = Depends(get_current_user)):
 
     if payload:
         try:
-            PeriodConfig.from_config(payload)  # still valid under today's rules?
-            return {"source": "last_run", "run_id": str(run.id), "config": payload}
+            # Round-tripped rather than returned as saved, so a run made
+            # with weekday names comes back as cycle days (A-E).
+            config = PeriodConfig.from_config(payload).to_config_payload()
+            return {"source": "last_run", "run_id": str(run.id), "config": config}
         except ValueError as error:
             return {
                 "source": "defaults",
@@ -1396,6 +1458,7 @@ def save_schedule(config: ScheduleGenerationConfig):
         )
 
         schedule_entries = result["schedule_entries"]
+        staff_schedule_entries = result["staff_schedule_entries"]
         compliance_flags = result["compliance_flags"]
         flex_groups = result["flex_groups"]
         flex_group_students = result["flex_group_students"]
@@ -1409,6 +1472,7 @@ def save_schedule(config: ScheduleGenerationConfig):
         )
 
         create_schedule_entries(schedule_entries, run_id=schedule_run_id)
+        create_staff_schedule_entries(staff_schedule_entries, run_id=schedule_run_id)
         create_compliance_flags(compliance_flags, run_id=schedule_run_id)
         create_flex_groups(flex_groups, run_id=schedule_run_id)
         create_flex_group_students(flex_group_students, run_id=schedule_run_id)
@@ -1418,6 +1482,7 @@ def save_schedule(config: ScheduleGenerationConfig):
             "summary": result["summary"],
             "saved": {
                 "schedule_entries": len(schedule_entries),
+                "staff_schedule_entries": len(staff_schedule_entries),
                 "compliance_flags": len(compliance_flags),
                 "flex_groups": len(flex_groups),
                 "flex_group_students": len(flex_group_students),
@@ -1494,6 +1559,7 @@ def _run_schedule_job(job_id: str, config: ScheduleGenerationConfig, user_id=Non
             progress_callback=progress,
         )
         schedule_entries = result["schedule_entries"]
+        staff_schedule_entries = result["staff_schedule_entries"]
         compliance_flags = result["compliance_flags"]
         flex_groups = result["flex_groups"]
         flex_group_students = result["flex_group_students"]
@@ -1508,6 +1574,7 @@ def _run_schedule_job(job_id: str, config: ScheduleGenerationConfig, user_id=Non
 
         progress(6, "Saving schedule to database")
         create_schedule_entries(schedule_entries, run_id=schedule_run_id)
+        create_staff_schedule_entries(staff_schedule_entries, run_id=schedule_run_id)
         create_compliance_flags(compliance_flags, run_id=schedule_run_id)
         create_flex_groups(flex_groups, run_id=schedule_run_id)
         create_flex_group_students(flex_group_students, run_id=schedule_run_id)
@@ -1520,6 +1587,7 @@ def _run_schedule_job(job_id: str, config: ScheduleGenerationConfig, user_id=Non
                 "summary": result["summary"],
                 "saved": {
                     "schedule_entries": len(schedule_entries),
+                    "staff_schedule_entries": len(staff_schedule_entries),
                     "compliance_flags": len(compliance_flags),
                     "flex_groups": len(flex_groups),
                     "flex_group_students": len(flex_group_students),

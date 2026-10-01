@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from scheduling_core import (
     DAYS,
+    day_label,
     PeriodConfig,
     ROLE_SPECIALS,
     full_student_name,
@@ -333,10 +334,10 @@ def validate_teacher_schedules(entries: List[Dict[str, Any]]) -> List[Dict[str, 
                     o_start, o_end = _interval(other)
                     flags.append(_flag(
                         "multiple", "teacher_double_booked", "critical",
-                        f"{teacher} double-booked on {day}",
+                        f"{teacher} double-booked on {day_label(day)}",
                         f"{teacher} has '{other_label[0]}' ({format_range(o_start, o_end)}) "
                         f"and '{label[0]}' ({format_range(start, end)}) at the same time.",
-                        affected_period=f"{day} {format_range(start, end)}",
+                        affected_period=f"{day_label(day)} {format_range(start, end)}",
                     ))
             active.append(entry)
 
@@ -352,9 +353,9 @@ def validate_teacher_schedules(entries: List[Dict[str, Any]]) -> List[Dict[str, 
                 flags.append(_flag(
                     "multiple", "group_size_violation", "warning",
                     f"{teacher}'s {subject} group is too large",
-                    f"{teacher} has {peak} students at once for {subject} on {day}. "
+                    f"{teacher} has {peak} students at once for {subject} on {day_label(day)}. "
                     f"Max for {service_type} is {max_size}.",
-                    affected_period=f"{day} {format_minute(at)}",
+                    affected_period=f"{day_label(day)} {format_minute(at)}",
                 ))
 
     return flags
@@ -367,7 +368,7 @@ def validate_class_sizes(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     classes: Dict[Tuple[str, str, str, str], List[Tuple[int, int]]] = {}
 
     for entry in entries:
-        if entry.get("service_type") != "general_ed" or not entry.get("teacher"):
+        if entry.get("service_type") != "General Ed" or not entry.get("teacher"):
             continue
         key = (entry["teacher"], entry["day_of_week"], entry.get("subject", ""), entry.get("room", ""))
         classes.setdefault(key, []).append(_interval(entry))
@@ -382,9 +383,9 @@ def validate_class_sizes(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             flags.append(_flag(
                 "multiple", "group_size_violation", "warning",
                 f"{subject} class exceeds max size",
-                f"{teacher}'s {subject} class on {day} has {peak} students at once. "
+                f"{teacher}'s {subject} class on {day_label(day)} has {peak} students at once. "
                 f"Max allowed is {max_allowed}.",
-                affected_period=f"{day} {format_minute(at)}",
+                affected_period=f"{day_label(day)} {format_minute(at)}",
             ))
 
     return flags
@@ -411,11 +412,11 @@ def validate_block_policies(
             flags.append(_flag(
                 entry["student_id"], "service_in_protected_block", "critical",
                 f"{entry.get('service_type')} {verb} {block_subject}",
-                f"A {entry.get('service_type')} session on {entry['day_of_week']} "
+                f"A {entry.get('service_type')} session on {day_label(entry['day_of_week'])} "
                 f"{format_range(start, end)} is {verb} {block_subject}, which the "
                 f"master schedule rules don't allow.",
                 legal_reference="Least Restrictive Environment (LRE) consideration",
-                affected_period=f"{entry['day_of_week']} {format_range(start, end)}",
+                affected_period=f"{day_label(entry['day_of_week'])} {format_range(start, end)}",
             ))
     return flags
 
@@ -443,11 +444,11 @@ def validate_pullout_limits(
         if len(intervals) > limit:
             flags.append(_flag(
                 student_id, "excessive_pullouts", "warning",
-                f"{name} has too many pullouts on {day}",
-                f"{name} has {len(intervals)} pullout services on {day}. "
+                f"{name} has too many pullouts on {day_label(day)}",
+                f"{name} has {len(intervals)} pullout services on {day_label(day)}. "
                 f"Max configured is {limit} per day.",
                 legal_reference="Least Restrictive Environment (LRE) consideration",
-                affected_period=f"{day} (all day)",
+                affected_period=f"{day_label(day)} (all day)",
             ))
         if min_gap > 0:
             intervals.sort()
@@ -455,11 +456,11 @@ def validate_pullout_limits(
                 if b_start - a_end < min_gap:
                     flags.append(_flag(
                         student_id, "pullouts_too_close", "warning",
-                        f"{name}'s pullouts on {day} are too close together",
+                        f"{name}'s pullouts on {day_label(day)} are too close together",
                         f"{name} has only {max(0, b_start - a_end)} minutes between "
-                        f"pullouts on {day}; the configured minimum is {min_gap}.",
+                        f"pullouts on {day_label(day)}; the configured minimum is {min_gap}.",
                         legal_reference="Least Restrictive Environment (LRE) consideration",
-                        affected_period=day,
+                        affected_period=day_label(day),
                     ))
                     break
 
@@ -469,10 +470,10 @@ def validate_pullout_limits(
             name = full_student_name(students_by_id.get(student_id, {}))
             flags.append(_flag(
                 student_id, "duplicate_service_same_day", "warning",
-                f"{name} has duplicate {service_type} on {day}",
-                f"{name} is scheduled for {service_type} {count} times on {day}. "
+                f"{name} has duplicate {service_type} on {day_label(day)}",
+                f"{name} is scheduled for {service_type} {count} times on {day_label(day)}. "
                 f"Max allowed is {cap} per day.",
-                affected_period=f"{day} (all day)",
+                affected_period=f"{day_label(day)} (all day)",
             ))
 
     return flags

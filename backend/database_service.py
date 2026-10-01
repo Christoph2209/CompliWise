@@ -12,6 +12,7 @@ from dmscheduler_db import (
     StudentService,
     ScheduleRun,
     ScheduleEntry,
+    StaffScheduleEntry,
     ComplianceFlag,
     FlexGroup,
     FlexGroupStudent,
@@ -371,6 +372,80 @@ def create_schedule_entries(
             "run_id": run_id,
         }
 
+    finally:
+        db.close()
+
+
+def create_staff_schedule_entries(
+    entries: List[Dict[str, Any]],
+    run_id: str,
+) -> Dict[str, Any]:
+    """Saves the scheduler's staff_schedule_entries (one row per teacher
+    per class/session) for a run."""
+    if not entries:
+        return {"saved_count": 0, "run_id": run_id}
+
+    db = SessionLocal()
+
+    try:
+        school = get_default_school(db)
+        run_uuid = uuid.UUID(run_id)
+        staff_index = _build_staff_index(db)
+
+        rows = []
+        unmatched_staff = set()
+
+        for entry in entries:
+            teacher_name = entry.get("teacher") or ""
+            staff = staff_index.get(teacher_name)
+
+            if not staff:
+                # Still saved, by name -- same as a ScheduleEntry whose
+                # teacher matches no StaffMember row.
+                unmatched_staff.add(teacher_name)
+
+            rows.append(StaffScheduleEntry(
+                id=uuid.uuid4(),
+                school_id=school.id,
+                run_id=run_uuid,
+
+                staff_id=staff.id if staff else None,
+                teacher_name=teacher_name,
+
+                day_of_week=entry.get("day_of_week"),
+                period=int(entry.get("period")),           # == start_minute
+                period_label=entry.get("period_label") or None,
+                start_minute=int(entry.get("start_minute")),
+                end_minute=int(entry.get("end_minute")),
+
+                subject=entry.get("subject") or "General Education",
+                block_subject=entry.get("block_subject"),
+                room=entry.get("room") or "",
+                grade=entry.get("grade"),
+
+                service_type=entry.get("service_type"),
+                delivery=entry.get("delivery"),
+                is_pullout=bool(entry.get("is_pullout")),
+                is_flex_period=bool(entry.get("is_flex_period")),
+
+                student_count=int(entry.get("student_count") or 0),
+            ))
+
+        if unmatched_staff:
+            logger.warning(
+                "create_staff_schedule_entries: %d teacher name(s) in run %s matched no "
+                "StaffMember row; their rows were saved without a staff_id: %s",
+                len(unmatched_staff), run_id, sorted(unmatched_staff)[:10],
+            )
+
+        db.add_all(rows)
+        db.commit()
+
+        return {"saved_count": len(rows), "run_id": run_id}
+
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 

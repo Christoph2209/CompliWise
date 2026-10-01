@@ -23,7 +23,10 @@ PIPELINE
   3. FLEX groups inside each grade's FLEX-role block (I-Block).
   4. Fill every remaining minute of every student's day from the
      master schedule (ELA with their homeroom teacher, Lunch, ...).
-  5. Compliance validation. 6. Proposals. 7. Return.
+  5. Staff schedules: one row per teacher per class/session, built
+     from everything booked above, plus each homeroom teacher's prep
+     and lunch. Saved to staff_schedule_entries by the API layer.
+  6. Compliance validation. 7. Proposals. 8. Return.
 
 ENTRY TIME FIELDS
   start_minute / end_minute -- minutes since midnight, [start, end)
@@ -41,11 +44,13 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from scheduling_core import (
     DAYS,
+    day_label,
     PeriodConfig,
     Block,
     ROLE_HOMEROOM,
     ROLE_FLEX,
     ROLE_SPECIALS,
+    ROLE_NONE,
     SERVICE_PULLOUT_BONUS,
     full_student_name,
     staff_full_name,
@@ -69,6 +74,9 @@ logger = logging.getLogger(__name__)
 DELIVERY_PULLOUT = "pullout"
 DELIVERY_PUSHIN = "push_in"
 DELIVERY_CLASS = "class"
+# Staff-schedule rows only: time a teacher isn't with students.
+DELIVERY_PREP = "prep"
+DELIVERY_BREAK = "break"
 
 # Rooms aren't modeled yet; a pull-out happens in "the provider's room".
 PULLOUT_ROOM = ""
@@ -238,7 +246,25 @@ class ScheduleIndex:
             and (iv["subject"], iv["room"]) == (subject, room)
         ]
 
-    def reserve_teacher(self, teacher, day, start, end, subject, room):
+    def teacher_free_pieces(self, teacher, day, start, end) -> List[Tuple[int, int]]:
+        """Parts of [start, end) where the teacher has nothing booked."""
+        busy = sorted(
+            (max(iv["start"], start), min(iv["end"], end))
+            for iv in self.teacher_intervals_on(teacher, day)
+            if _overlaps(start, end, iv["start"], iv["end"])
+        )
+        pieces: List[Tuple[int, int]] = []
+        cursor = start
+        for s, e in busy:
+            if s > cursor:
+                pieces.append((cursor, s))
+            cursor = max(cursor, e)
+        if cursor < end:
+            pieces.append((cursor, end))
+        return pieces
+
+    def reserve_teacher(self, teacher, day, start, end, subject, room,
+                        service_type="General Ed", block_subject="", is_flex_period=False):
         """Book a teacher with no student attached (homeroom teaching
         blocks, a FLEX group's standing slot)."""
         if not teacher:
@@ -246,6 +272,8 @@ class ScheduleIndex:
         self.teacher_intervals.setdefault((teacher, day), []).append({
             "start": start, "end": end, "subject": subject, "room": room,
             "student_id": None, "grade": None,
+            "service_type": service_type, "delivery": DELIVERY_CLASS,
+            "block_subject": block_subject, "is_flex_period": is_flex_period,
         })
 
     # ---------------- service limits ----------------
@@ -291,6 +319,7 @@ class ScheduleIndex:
         day = entry["day_of_week"]
         start, end = int(entry["start_minute"]), int(entry["end_minute"])
         teacher = entry.get("teacher") or ""
+        delivery = entry.get("delivery")
 
         self.student_intervals.setdefault((student_id, day), []).append((start, end))
 
@@ -299,9 +328,11 @@ class ScheduleIndex:
                 "start": start, "end": end,
                 "subject": entry.get("subject", ""), "room": entry.get("room", ""),
                 "student_id": student_id, "grade": entry.get("grade"),
+                "service_type": entry.get("service_type", ""), "delivery": delivery,
+                "block_subject": entry.get("block_subject", ""),
+                "is_flex_period": bool(entry.get("is_flex_period")),
             })
 
-        delivery = entry.get("delivery")
         if delivery in (DELIVERY_PULLOUT, DELIVERY_PUSHIN):
             service_type = entry.get("service_type", "")
             count_key = (student_id, service_type, day)
@@ -433,7 +464,8 @@ def reserve_homeroom_teachers(homeroom_info, period_config: PeriodConfig, schedu
             for block in period_config.blocks_for(info["grade"], day):
                 if period_config.role(block.subject) == ROLE_HOMEROOM:
                     schedule_index.reserve_teacher(
-                        teacher, day, block.start, block.end, block.subject, homeroom
+                        teacher, day, block.start, block.end, block.subject, homeroom,
+                        block_subject=block.subject,
                     )
 
 
@@ -870,9 +902,11 @@ def build_specials_schedule(
     """
     The master schedule already says WHEN each homeroom has Specials;
     this decides WHICH subject and teacher each of those blocks gets.
-    Days are walked in order and, within a day, sibling homerooms take
-    turns, so if 2A gets the PE teacher on Monday, 2B (same block)
-    takes Music. A session is exactly one Specials block long.
+    Each homeroom gets a plan that spaces its subjects through the
+    cycle; days are then walked in order and, within a day, sibling
+    homerooms take turns, so if 2A gets the PE teacher on A day, 2B
+    (same block) takes Music. A session is exactly one Specials block
+    long.
     """
     entries: List[Dict[str, Any]] = []
     flags: List[Dict[str, Any]] = []
@@ -923,8 +957,25 @@ def build_specials_schedule(
             for subject in subjects:
                 if i < needed[subject]:
                     queue.append(subject)
+        # Which subject each block should get. Mandated sessions are
+        # spaced evenly through the cycle (3 PE in 5 blocks -> A, C, E)
+        # instead of filling its first days, and each homeroom starts
+        # one day later than the last so they don't all want the PE
+        # teacher on the same day.
+        mandated_queue = [s for s in queue if s in SPECIALS_MANDATED_MINUTES_PER_WEEK]
+        optional_queue = [s for s in queue if s not in SPECIALS_MANDATED_MINUTES_PER_WEEK]
+        n, k = len(blocks), min(len(mandated_queue), len(blocks))
+        offset = len(plans) % n
+        if k <= 1:
+            slots = [offset] * k
+        else:
+            slots = sorted((round(i * (n - 1) / (k - 1)) + offset) % n for i in range(k))
+        planned: Dict[int, str] = dict(zip(slots, mandated_queue))
+        open_slots = [i for i in range(n) if i not in planned]
+        planned.update(zip(open_slots, optional_queue))
+
         plans[homeroom] = {
-            "blocks": blocks, "queue": queue, "needed": needed,
+            "blocks": blocks, "queue": queue, "needed": needed, "planned": planned,
             "minutes": Counter(), "unstaffed": 0,
         }
 
@@ -936,7 +987,7 @@ def build_specials_schedule(
                     sid, day, start, end, period_config,
                     subject=label[0], block_subject=block.subject,
                     teacher=teacher, room=label[1], delivery=DELIVERY_CLASS,
-                    service_type="general_ed", grade=info["grade"],
+                    service_type="General Ed", grade=info["grade"],
                 )
                 entries.append(entry)
                 schedule_index.add_entry(entry)
@@ -994,14 +1045,14 @@ def build_specials_schedule(
             f"{homeroom} combined for {subject}",
             f"Homeroom {homeroom} had no dedicated {subject} teacher free, so it "
             f"joined {label[1]}'s class with {name}.",
-            affected_period=f"{day} {format_range(block.start, block.end)}",
+            affected_period=f"{day_label(day)} {format_range(block.start, block.end)}",
         ))
         return True
 
     for day in DAYS:
         for homeroom, plan in plans.items():
             info = homeroom_info[homeroom]
-            for block_day, block in plan["blocks"]:
+            for index, (block_day, block) in enumerate(plan["blocks"]):
                 if block_day != day:
                     continue
                 if not any(
@@ -1010,16 +1061,33 @@ def build_specials_schedule(
                 ):
                     continue
 
-                # Mandated subjects (PE) get first claim on the block --
+                # The block's planned subject gets first try. After it,
+                # mandated subjects (PE) come before target-only ones --
                 # joining another homeroom's class if their teacher is
-                # taken -- before any target-only subject is considered.
+                # taken. If the mandate has fallen behind (as many
+                # sessions still owed as blocks left), the plan is
+                # dropped and mandated subjects go first.
                 # Once targets are met, keep staffing the block anyway:
                 # it's the homeroom teacher's prep.
                 pending = list(dict.fromkeys(plan["queue"])) or list(subjects)
                 mandated = [s for s in pending if s in SPECIALS_MANDATED_MINUTES_PER_WEEK]
                 optional = [s for s in pending if s not in SPECIALS_MANDATED_MINUTES_PER_WEEK]
+                planned = plan["planned"].get(index)
+                mandated_owed = sum(
+                    1 for s in plan["queue"] if s in SPECIALS_MANDATED_MINUTES_PER_WEEK
+                )
+                if planned in pending and mandated_owed < len(plan["blocks"]) - index:
+                    tiers = (
+                        [planned],
+                        [s for s in mandated if s != planned],
+                        [s for s in optional if s != planned],
+                    )
+                elif planned in mandated:
+                    tiers = ([planned], [s for s in mandated if s != planned], optional)
+                else:
+                    tiers = (mandated, optional)
                 booked = False
-                for tier in (mandated, optional):
+                for tier in tiers:
                     for subject in tier:
                         if try_dedicated(homeroom, plan, info, day, block, subject):
                             booked = True
@@ -1248,7 +1316,9 @@ def build_flex_groups(
                 flex_load[teacher] += 1
                 for day, block in flex_slots:
                     schedule_index.reserve_teacher(
-                        teacher, day, block.start, block.end, subject_name, ""
+                        teacher, day, block.start, block.end, subject_name, "",
+                        service_type="FLEX", block_subject=block.subject,
+                        is_flex_period=True,
                     )
                     for student in chunk:
                         sid = student["student_id"]
@@ -1338,7 +1408,7 @@ def fill_remaining_blocks(
                         sid, day, start, end, period_config,
                         subject=subject, block_subject=block.subject,
                         teacher=entry_teacher, room=room, delivery=DELIVERY_CLASS,
-                        service_type="general_ed", grade=grade,
+                        service_type="General Ed", grade=grade,
                         is_flex_period=role == ROLE_FLEX,
                     )
                     entries.append(entry)
@@ -1354,6 +1424,148 @@ def fill_remaining_blocks(
         ))
 
     return entries, flags
+
+
+# ===============================================================
+# Staff schedules
+# ===============================================================
+
+def make_staff_entry(
+    teacher: str,
+    day: str,
+    start: int,
+    end: int,
+    period_config: PeriodConfig,
+    subject: str,
+    block_subject: str,
+    room: str,
+    delivery: str,
+    service_type: str,
+    grade: Optional[str],
+    student_ids: List[str],
+    is_flex_period: bool = False,
+) -> Dict[str, Any]:
+    return {
+        "teacher": teacher,
+        "day_of_week": day,
+        "period": start,
+        "start_minute": start,
+        "end_minute": end,
+        "period_label": period_config.period_label(start),
+        "time_range": format_range(start, end),
+        "subject": subject,
+        "block_subject": block_subject,
+        "room": room,
+        "is_pullout": delivery == DELIVERY_PULLOUT,
+        "delivery": delivery,
+        "service_type": service_type,
+        "is_flex_period": is_flex_period,
+        "grade": grade,
+        "student_ids": student_ids,
+        "student_count": len(student_ids),
+    }
+
+
+def build_staff_schedule_entries(
+    schedule_index: ScheduleIndex,
+    student_entries: List[Dict[str, Any]],
+    homeroom_info: Dict[str, Dict[str, Any]],
+    period_config: PeriodConfig,
+) -> List[Dict[str, Any]]:
+    """
+    One row per teacher per class/session, from the teacher's side.
+
+    Everything a teacher is booked for is already in the index, one
+    interval per student (plus the student-less reservations). Intervals
+    with the same (subject, room) label that overlap are one class -- a
+    homeroom's ELA is split into pieces around pull-outs but is still
+    one ELA block for the teacher. Back-to-back sessions (Speech at
+    9:00 and again at 9:30) only touch, so they stay separate rows.
+
+    Homeroom teachers also get rows for the rest of their class's day:
+    Prep while a Specials teacher has the class, and the class's
+    Lunch/Recess. Other staff only get what they were booked for --
+    nothing in the data says when a provider takes lunch.
+    """
+    rows: List[Dict[str, Any]] = []
+
+    def close(teacher, day, session):
+        first = session[0]
+        student_ids = list(dict.fromkeys(iv["student_id"] for iv in session if iv["student_id"]))
+        grades = Counter(iv["grade"] for iv in session if iv["grade"])
+        rows.append(make_staff_entry(
+            teacher, day,
+            min(iv["start"] for iv in session), max(iv["end"] for iv in session),
+            period_config,
+            subject=first["subject"], block_subject=first["block_subject"],
+            room=first["room"], delivery=first["delivery"],
+            service_type=first["service_type"],
+            grade=grades.most_common(1)[0][0] if grades else None,
+            student_ids=student_ids,
+            is_flex_period=first["is_flex_period"],
+        ))
+
+    for (teacher, day), intervals in schedule_index.teacher_intervals.items():
+        by_label: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+        for iv in intervals:
+            by_label.setdefault((iv["subject"], iv["room"]), []).append(iv)
+        for items in by_label.values():
+            items.sort(key=lambda iv: (iv["start"], iv["end"]))
+            session: List[Dict[str, Any]] = []
+            session_end = 0
+            for iv in items:
+                if session and iv["start"] >= session_end:
+                    close(teacher, day, session)
+                    session = []
+                session_end = max(session_end, iv["end"]) if session else iv["end"]
+                session.append(iv)
+            if session:
+                close(teacher, day, session)
+
+    unstaffed_starts: Dict[Tuple[str, str], List[int]] = {}
+    for entry in student_entries:
+        if entry["subject"].endswith("(unstaffed)"):
+            unstaffed_starts.setdefault(
+                (entry["room"], entry["day_of_week"]), []
+            ).append(entry["start_minute"])
+
+    for homeroom, info in homeroom_info.items():
+        teacher = info["teacher"]
+        if not teacher:
+            continue
+        for day in DAYS:
+            for block in period_config.blocks_for(info["grade"], day):
+                role = period_config.role(block.subject)
+                if role not in (ROLE_SPECIALS, ROLE_NONE):
+                    continue
+                unstaffed = role == ROLE_SPECIALS and any(
+                    block.start <= s < block.end
+                    for s in unstaffed_starts.get((homeroom, day), [])
+                )
+                for start, end in schedule_index.teacher_free_pieces(
+                    teacher, day, block.start, block.end
+                ):
+                    if unstaffed:
+                        # No Specials teacher took the class, so the
+                        # homeroom teacher keeps it and loses the prep.
+                        subject, delivery, service_type = (
+                            f"{block.subject} (unstaffed)", DELIVERY_CLASS, "General Ed"
+                        )
+                    elif role == ROLE_SPECIALS:
+                        subject, delivery, service_type = "Prep", DELIVERY_PREP, "Prep"
+                    else:
+                        subject, delivery, service_type = (
+                            block.subject, DELIVERY_BREAK, "Non-instructional"
+                        )
+                    rows.append(make_staff_entry(
+                        teacher, day, start, end, period_config,
+                        subject=subject, block_subject=block.subject, room=homeroom,
+                        delivery=delivery, service_type=service_type,
+                        grade=info["grade"], student_ids=[],
+                    ))
+
+    rows.sort(key=lambda r: (r["teacher"], DAYS.index(r["day_of_week"]), r["start_minute"]))
+    return rows
 
 
 # ===============================================================
@@ -1561,7 +1773,14 @@ def schedule_iep_services_first(
         )
 
     # ---------------------------------------------------------
-    # 5. Validate
+    # 5. Staff schedules (the rows that get saved per teacher)
+    # ---------------------------------------------------------
+    staff_schedule_entries = build_staff_schedule_entries(
+        schedule_index, all_entries, homeroom_info, period_config,
+    )
+
+    # ---------------------------------------------------------
+    # 6. Validate
     # ---------------------------------------------------------
     if progress_callback:
         progress_callback(4, "Running compliance validation")
@@ -1577,7 +1796,7 @@ def schedule_iep_services_first(
     )
 
     # ---------------------------------------------------------
-    # 6. ScheduleProposal records
+    # 7. ScheduleProposal records
     # ---------------------------------------------------------
     if progress_callback:
         progress_callback(5, "Building schedule proposals")
@@ -1626,7 +1845,7 @@ def schedule_iep_services_first(
         })
 
     # ---------------------------------------------------------
-    # 7. Return everything to the API layer
+    # 8. Return everything to the API layer
     # ---------------------------------------------------------
     sessions_short = sum(
         r["sessions_needed"] - r["sessions_scheduled"] for r in placement_report
@@ -1655,6 +1874,7 @@ def schedule_iep_services_first(
         "flex_groups": flex_groups,
         "flex_group_students": student_flex_group_rows,
         "staff_schedule": staff_schedule,
+        "staff_schedule_entries": staff_schedule_entries,
         "service_placement_report": placement_report,
         "period_config": period_config.to_dict(),
         "summary": {
@@ -1664,6 +1884,7 @@ def schedule_iep_services_first(
             "flex_groups_created": len(flex_groups),
             "flex_group_students_created": len(student_flex_group_rows),
             "staff_members_scheduled": len(staff_schedule),
+            "staff_schedule_entries_created": len(staff_schedule_entries),
             "service_sessions_short": sessions_short,
         },
     }

@@ -4,9 +4,9 @@ import { getStaff } from "../api/staff";
 import { cachedFetch, invalidateCache } from "../api/apiCache";
 import { useAuth } from "../context/authContext";
 import RunSelector from "../components/RunSelector";
+import { CYCLE_DAYS as DAYS, dayLabel } from "../cycleDays";
 import "../components/StudentSchedules.css";
 
-const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"] as const;
 
 const SPECIALS_SUBJECTS = ["PE", "Music", "Art"];
 
@@ -329,7 +329,7 @@ export default function StudentSchedules() {
             <div />
             {DAYS.map((day) => (
               <div key={day} className="cal-day-head">
-                {day}
+                {dayLabel(day)}
               </div>
             ))}
 
@@ -400,7 +400,7 @@ export default function StudentSchedules() {
       {editingEntry && draft && !isTeacher && (
         <section className="cal-editor" aria-label="Edit schedule entry">
           <h2>
-            {editingEntry.day_of_week} {editingEntry.time_range}
+            {dayLabel(editingEntry.day_of_week)} {editingEntry.time_range}
             {editingEntry.block_subject ? `, during ${editingEntry.block_subject}` : ""}
           </h2>
 

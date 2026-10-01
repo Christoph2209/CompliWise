@@ -31,7 +31,38 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
-DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+# The school runs on a rotating five-day cycle, not the calendar week:
+# an "A day" is whichever date the school calendar says it is, so a
+# holiday shifts the cycle instead of always costing Monday's classes.
+# Everything scheduled is stored against a cycle day ("A".."E").
+DAYS = ["A", "B", "C", "D", "E"]
+
+# Runs and master schedules saved before the cycle used weekday names.
+LEGACY_WEEKDAYS = {
+    "Monday": "A",
+    "Tuesday": "B",
+    "Wednesday": "C",
+    "Thursday": "D",
+    "Friday": "E",
+}
+
+
+def normalize_day(raw: Any) -> str:
+    """"a" / "A" / "Monday" -> "A". Unknown values come back unchanged
+    (upper-cased) so callers can report them."""
+    text = str(raw or "").strip()
+    return LEGACY_WEEKDAYS.get(text.title(), text.upper())
+
+
+def day_index(raw: Any) -> int:
+    """Position in the cycle, for sorting. Unknown days sort last."""
+    day = normalize_day(raw)
+    return DAYS.index(day) if day in DAYS else len(DAYS)
+
+
+def day_label(day: str) -> str:
+    """"A" -> "A day", for flag text."""
+    return f"{day} day"
 
 
 # ---------------------------------------------------------------
@@ -355,7 +386,8 @@ class PeriodConfig:
     uses DEFAULT_MASTER_SCHEDULE.
 
     grade_schedules: {grade: [{"subject", "start", "end", "days"?}]}
-        "days" is optional; omit it for blocks that run Monday-Friday.
+        "days" is optional; omit it for blocks that run every cycle
+        day (A-E).
     block_policies: {subject: {role, allow_pullout, allow_pushin,
         pullout_score}} -- merged over DEFAULT_BLOCK_POLICIES. A
         subject not in the defaults defines a new block type.
@@ -420,7 +452,7 @@ class PeriodConfig:
                 subject = normalize_subject(block_def.get("subject"), self.block_policies.keys())
                 start = parse_clock(block_def.get("start"))
                 end = parse_clock(block_def.get("end"))
-                days = tuple(block_def.get("days") or DAYS)
+                days = tuple(normalize_day(d) for d in (block_def.get("days") or DAYS))
                 bad_days = [d for d in days if d not in DAYS]
                 if bad_days:
                     raise ValueError(f"Grade {grade} block {subject} has invalid day(s) {bad_days}")
@@ -477,7 +509,7 @@ class PeriodConfig:
                 for earlier, later in zip(todays, todays[1:]):
                     if later.start < earlier.end:
                         raise ValueError(
-                            f"Grade {grade} on {day}: {earlier.label} overlaps {later.label}"
+                            f"Grade {grade} on {day_label(day)}: {earlier.label} overlaps {later.label}"
                         )
 
         if self.max_pullouts_per_day < 0:
@@ -601,7 +633,7 @@ class PeriodConfig:
         Expected payload:
           grade_schedules: [{"grade": "2", "blocks": [
               {"subject": "Math", "start_time": "08:20", "end_time": "09:20",
-               "days": ["Monday", ...]  # optional
+               "days": ["A", "C", ...]  # optional cycle days
               }, ...]}]
           block_policies: [{"subject": "ELA", "allow_pullout": true,
               "allow_pushin": true, "pullout_score": -400,

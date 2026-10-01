@@ -8,6 +8,7 @@ interface FlexGroupRaw {
     student_id?: string;
     student_name?: string;
     period?: string | number;
+    time_range?: string | null;
 }
 
 interface FlexGroupStudent {
@@ -20,6 +21,7 @@ interface FlexGroupCard {
     name: string;
     staff_name: string;
     period?: string | number;
+    time_range?: string | null;
     days: string[];
     students: FlexGroupStudent[];
 }
@@ -46,6 +48,7 @@ export default function FlexGroups() {
                             name: g.name,
                             staff_name: g.staff_name,
                             period: g.period,
+                            time_range: g.time_range,
                             students: [],
                             days: []
                         };
@@ -144,7 +147,7 @@ export default function FlexGroups() {
                         >
                             <h3 style={{ color: "var(--text-h)" }}>{group.name}</h3>
                             <p style={{ color: "var(--text)" }}>Teacher: {group.staff_name}</p>
-                            <p style={{ color: "var(--text)" }}>{group.days.join(", ")} - Period {group.period}</p>
+                            <p style={{ color: "var(--text)" }}>{group.days.join(", ")} days{group.time_range ? ` - ${group.time_range}` : ""}</p>
                             {search && matchingStudents.length > 0 && (
                                 <p style={{ fontSize: "12px", color: "var(--text)" }}>
                                     Matching students: {matchingStudents.map(s => s.name).join(", ")}
