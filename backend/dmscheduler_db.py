@@ -191,6 +191,10 @@ class ScheduleRun(Base):
         Run 1 = draft
         Run 2 = draft
         Run 3 = published
+
+    summary_json["period_config"] holds the master schedule + rules the
+    run was built with (PeriodConfig.to_config_payload()), so it can be
+    re-checked later and used to prefill the next run.
     """
 
     __tablename__ = "schedule_runs"
@@ -214,10 +218,14 @@ class ScheduleRun(Base):
 
 class ScheduleEntry(Base):
     """
-    Actual student schedule row.
+    Actual student schedule row: one [start_minute, end_minute) interval.
 
     One row per:
-        student + day + period + schedule_run
+        student + day + start time + schedule_run
+
+    `period` holds the same value as start_minute (minutes since
+    midnight, 660 = 11:00 AM) so the unique constraint below still
+    means "one row per student per start time per run".
     """
 
     __tablename__ = "schedule_entries"
@@ -251,6 +259,13 @@ class ScheduleEntry(Base):
     day_of_week: Mapped[str] = mapped_column(String(20), nullable=False)
     period: Mapped[int] = mapped_column(Integer, nullable=False)
     period_label: Mapped[Optional[str]] = mapped_column(String(20))
+
+    # Master-schedule time model. Nullable only so rows from runs made
+    # before this migration still load; every new row sets all four.
+    start_minute: Mapped[Optional[int]] = mapped_column(Integer)
+    end_minute: Mapped[Optional[int]] = mapped_column(Integer)
+    delivery: Mapped[Optional[str]] = mapped_column(String(20))        # pullout | push_in | class
+    block_subject: Mapped[Optional[str]] = mapped_column(String(100))  # master-schedule block it sits in
 
     subject: Mapped[str] = mapped_column(String(255), nullable=False)
     room: Mapped[Optional[str]] = mapped_column(String(100))
@@ -336,6 +351,8 @@ class FlexGroup(Base):
     day_of_week: Mapped[Optional[str]] = mapped_column(String(20))
     period: Mapped[Optional[int]] = mapped_column(Integer)
     period_label: Mapped[Optional[str]] = mapped_column(String(20))
+    start_minute: Mapped[Optional[int]] = mapped_column(Integer)
+    end_minute: Mapped[Optional[int]] = mapped_column(Integer)
 
     max_group_size: Mapped[int] = mapped_column(Integer, default=10)
     status: Mapped[str] = mapped_column(String(50), default="active")

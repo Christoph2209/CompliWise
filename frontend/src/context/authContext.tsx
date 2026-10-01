@@ -6,16 +6,24 @@ import {
 } from "react";
 
 import type { User } from "./authTypes";
-import { getCurrentUser } from "../api/auth"; // wherever getCurrentUser lives
+import { api } from "../api/clients";
+import { getCurrentUser } from "../api/auth";
 
 type AuthContextType = {
   user: User | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextType | null>(null);
+
+// Lets tabs in the same browser tell each other the logged-in user changed,
+// so an old tab reloads instead of silently acting as the new user.
+const authChannel =
+  typeof BroadcastChannel !== "undefined"
+    ? new BroadcastChannel("compliwise-auth")
+    : null;
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -28,26 +36,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    if (!authChannel) return;
+    const handleAuthChange = () => window.location.reload();
+    authChannel.addEventListener("message", handleAuthChange);
+    return () => authChannel.removeEventListener("message", handleAuthChange);
+  }, []);
+
   async function login(email: string, password: string) {
-    const response = await fetch("http://localhost:8000/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    });
-
-    if (!response.ok) {
-      throw new Error("Login failed");
-    }
-
-    // trust /me as the source of truth, not whatever /login returns
+    await api.post("/login", { email, password }); // throws on 401
     const freshUser = await getCurrentUser();
     setUser(freshUser);
+    authChannel?.postMessage("auth-changed");
   }
 
-  function logout() {
-    setUser(null);
-    // if you're using a cookie-based session, also hit a /logout endpoint
-    // to actually invalidate it server-side, not just clear local state
+  async function logout() {
+    try {
+      await api.post("/logout");
+    } finally {
+      setUser(null);
+      authChannel?.postMessage("auth-changed");
+    }
   }
 
   return (

@@ -1,4 +1,4 @@
-import type { ScheduleGenerationConfig } from "../components/GenerateScheduleModal";
+import type { ScheduleConfigDefaults, ScheduleGenerationConfig } from "../components/GenerateScheduleModal";
 import { api } from "./clients";
 
 export async function getSchedule(runId?: string) {
@@ -41,4 +41,9 @@ export async function startScheduleGeneration(config: ScheduleGenerationConfig) 
 export async function getScheduleGenerationStatus(jobId: string) {
   const { data } = await api.get(`/schedule/generate/status/${jobId}`);
   return data as ScheduleJobStatus;
+}
+
+export async function getScheduleConfigDefaults(): Promise<ScheduleConfigDefaults> {
+  const { data } = await api.get<ScheduleConfigDefaults>("/schedule/config-defaults");
+  return data;
 }
