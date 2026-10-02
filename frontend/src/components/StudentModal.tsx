@@ -1,37 +1,66 @@
 import{ useMemo } from "react";
+import { dayLabel } from "../cycleDays";
 
-type ScheduleEntry = {
+// A staff schedule row (one class/session for one teacher).
+type StaffSlot = {
+  staff_id?: string | null;
   day_of_week: string;
-  period: number | string;
-  period_label?: string;
+  start_minute: number;
+  end_minute: number;
+  time_range?: string | null;
   subject?: string;
-  service_type?: string;
-  staff_id?: string;
-  staff_name?: string;
+  service_type?: string | null;
+  room?: string | null;
+};
+
+// A per-student schedule entry from /schedule.
+type ScheduleEntry = {
+  staff_id?: string | null;
+  day_of_week: string;
+  start_minute?: number | null;
+  end_minute?: number | null;
+  subject?: string;
+  room?: string | null;
   student_name?: string;
   student_id?: string;
 };
 
 type Props = {
-  selectedSlot: ScheduleEntry | null;
-  teacherSchedule: ScheduleEntry[];
+  selectedSlot: StaffSlot | null;
+  /** The run's student entries; null while they're still loading. */
+  scheduleEntries: ScheduleEntry[] | null;
   onClose: () => void;
 };
 
 export default function StudentModal({
   selectedSlot,
-  teacherSchedule,
+  scheduleEntries,
   onClose,
 }: Props) {
+ // A class is every student entry with this teacher, day, subject and
+ // room whose time overlaps the slot. A student pulled out mid-block
+ // has two pieces of the same class, so dedupe by student.
  const students = useMemo(() => {
-  if (!selectedSlot) return [];
+  if (!selectedSlot || !scheduleEntries) return [];
 
-  return teacherSchedule.filter(
-    (student) =>
-      student.day_of_week === selectedSlot.day_of_week &&
-      Number(student.period) === Number(selectedSlot.period)
-  );
-}, [teacherSchedule, selectedSlot]);
+  const seen = new Map<string, string>();
+  for (const entry of scheduleEntries) {
+    if (
+      entry.staff_id === selectedSlot.staff_id &&
+      entry.day_of_week === selectedSlot.day_of_week &&
+      entry.subject === selectedSlot.subject &&
+      (entry.room ?? "") === (selectedSlot.room ?? "") &&
+      typeof entry.start_minute === "number" &&
+      typeof entry.end_minute === "number" &&
+      entry.start_minute < selectedSlot.end_minute &&
+      selectedSlot.start_minute < entry.end_minute
+    ) {
+      const key = entry.student_id ?? entry.student_name ?? "";
+      if (!seen.has(key)) seen.set(key, entry.student_name || entry.student_id || "");
+    }
+  }
+  return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
+}, [scheduleEntries, selectedSlot]);
 
 if (!selectedSlot) {
   return null; // early return now happens AFTER all hooks have run
@@ -82,7 +111,9 @@ if (!selectedSlot) {
           <h2 style={{ margin: 0 }}>{selectedSlot.subject || "Class"}</h2>
 
           <p style={{ margin: "5px 0", color: "var(--text)" }}>
-            {selectedSlot.day_of_week} • {selectedSlot.period_label || `Period ${selectedSlot.period}`}
+            {dayLabel(selectedSlot.day_of_week)}
+            {selectedSlot.time_range ? ` • ${selectedSlot.time_range}` : ""}
+            {selectedSlot.room ? ` • ${selectedSlot.room}` : ""}
           </p>
 
           {selectedSlot.service_type && (
@@ -95,15 +126,19 @@ if (!selectedSlot) {
         <hr style={{ borderColor: "var(--border)" }} />
 
         {/* Students */}
-        <h3 style={{ marginTop: "10px", color: "var(--text-h)" }}>Students</h3>
+        <h3 style={{ marginTop: "10px", color: "var(--text-h)" }}>
+          Students{scheduleEntries ? ` (${students.length})` : ""}
+        </h3>
 
-        {students.length === 0 ? (
+        {scheduleEntries === null ? (
+          <p style={{ color: "var(--text)" }}>Loading students…</p>
+        ) : students.length === 0 ? (
           <p style={{ color: "var(--text)" }}>No students in this class</p>
         ) : (
           <ul style={{ paddingLeft: "18px", color: "var(--text-h)" }}>
-            {students.map((student, index) => (
+            {students.map((name, index) => (
               <li key={index} style={{ marginBottom: "6px" }}>
-                {student.student_name || student.student_id}
+                {name}
               </li>
             ))}
           </ul>

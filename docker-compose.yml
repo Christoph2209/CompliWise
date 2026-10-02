@@ -22,6 +22,7 @@ services:
       - db
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-compliwise}:${POSTGRES_PASSWORD:-changeme}@db:5432/${POSTGRES_DB:-compliwise}
+      SESSION_SECRET: ${SESSION_SECRET}
       # Comma-separated list is fine — main.py's CORSMiddleware setup needs
       # to split on "," once you make it env-driven (see chat).
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}

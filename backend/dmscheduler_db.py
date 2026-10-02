@@ -9,6 +9,7 @@ Creates tables for:
 - StudentService
 - ScheduleRun
 - ScheduleEntry
+- StaffScheduleEntry
 - ComplianceFlag
 - FlexGroup
 - FlexGroupStudent
@@ -191,6 +192,10 @@ class ScheduleRun(Base):
         Run 1 = draft
         Run 2 = draft
         Run 3 = published
+
+    summary_json["period_config"] holds the master schedule + rules the
+    run was built with (PeriodConfig.to_config_payload()), so it can be
+    re-checked later and used to prefill the next run.
     """
 
     __tablename__ = "schedule_runs"
@@ -214,10 +219,14 @@ class ScheduleRun(Base):
 
 class ScheduleEntry(Base):
     """
-    Actual student schedule row.
+    Actual student schedule row: one [start_minute, end_minute) interval.
 
     One row per:
-        student + day + period + schedule_run
+        student + day + start time + schedule_run
+
+    `period` holds the same value as start_minute (minutes since
+    midnight, 660 = 11:00 AM) so the unique constraint below still
+    means "one row per student per start time per run".
     """
 
     __tablename__ = "schedule_entries"
@@ -252,6 +261,13 @@ class ScheduleEntry(Base):
     period: Mapped[int] = mapped_column(Integer, nullable=False)
     period_label: Mapped[Optional[str]] = mapped_column(String(20))
 
+    # Master-schedule time model. Nullable only so rows from runs made
+    # before this migration still load; every new row sets all four.
+    start_minute: Mapped[Optional[int]] = mapped_column(Integer)
+    end_minute: Mapped[Optional[int]] = mapped_column(Integer)
+    delivery: Mapped[Optional[str]] = mapped_column(String(20))        # pullout | push_in | class
+    block_subject: Mapped[Optional[str]] = mapped_column(String(100))  # master-schedule block it sits in
+
     subject: Mapped[str] = mapped_column(String(255), nullable=False)
     room: Mapped[Optional[str]] = mapped_column(String(100))
 
@@ -280,6 +296,57 @@ class ScheduleEntry(Base):
         Index("idx_schedule_run_student", "run_id", "student_id"),
         Index("idx_schedule_run_staff", "run_id", "staff_id"),
         Index("idx_schedule_run_grade", "run_id", "grade"),
+    )
+
+
+class StaffScheduleEntry(Base):
+    """
+    A teacher's schedule row: one class/session [start_minute, end_minute)
+    on a day, from the teacher's side.
+
+    ScheduleEntry is per student, so a teacher's ELA block is ~25 rows
+    there and time with no student (prep, lunch) can't be stored at
+    all. This is one row per teacher per class. The students in a class
+    are the run's ScheduleEntry rows with the same staff/day/subject/
+    room that overlap it; student_count is how many there were.
+    """
+
+    __tablename__ = "staff_schedule_entries"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+
+    school_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("schools.id"), nullable=False)
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("schedule_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    staff_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("staff_members.id"))
+    teacher_name: Mapped[Optional[str]] = mapped_column(String(255))
+
+    day_of_week: Mapped[str] = mapped_column(String(20), nullable=False)
+    period: Mapped[int] = mapped_column(Integer, nullable=False)   # == start_minute
+    period_label: Mapped[Optional[str]] = mapped_column(String(20))
+    start_minute: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_minute: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    block_subject: Mapped[Optional[str]] = mapped_column(String(100))
+    room: Mapped[Optional[str]] = mapped_column(String(100))
+    grade: Mapped[Optional[str]] = mapped_column(String(50))
+
+    service_type: Mapped[Optional[str]] = mapped_column(String(100))
+    delivery: Mapped[Optional[str]] = mapped_column(String(20))   # pullout | push_in | class | prep | break
+    is_pullout: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_flex_period: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    student_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_staff_schedule_run_staff", "run_id", "staff_id"),
+        Index("idx_staff_schedule_slot", "run_id", "staff_id", "day_of_week", "period"),
     )
 
 
@@ -336,6 +403,8 @@ class FlexGroup(Base):
     day_of_week: Mapped[Optional[str]] = mapped_column(String(20))
     period: Mapped[Optional[int]] = mapped_column(Integer)
     period_label: Mapped[Optional[str]] = mapped_column(String(20))
+    start_minute: Mapped[Optional[int]] = mapped_column(Integer)
+    end_minute: Mapped[Optional[int]] = mapped_column(Integer)
 
     max_group_size: Mapped[int] = mapped_column(Integer, default=10)
     status: Mapped[str] = mapped_column(String(50), default="active")

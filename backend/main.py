@@ -19,6 +19,7 @@ from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+from starlette.middleware.sessions import SessionMiddleware
 from dotenv import load_dotenv
 from auth_utils import hash_password, verify_password
 from compliance import run_all_compliance_checks, check_staff_coverage
@@ -30,6 +31,7 @@ from database_service import (
     create_flex_groups,
     create_schedule_entries,
     create_schedule_run,
+    create_staff_schedule_entries,
     delete_entity_many,
     get_staff,
     get_students,
@@ -39,6 +41,7 @@ from dmscheduler_db import (
     FlexGroup,
     FlexGroupStudent,
     ScheduleEntry,
+    StaffScheduleEntry,
     SessionLocal,
     School,
     StaffMember,
@@ -49,8 +52,8 @@ from dmscheduler_db import (
     AuditLog,
 )
 from datetime import datetime, timezone
-from scheduler import DAYS, schedule_iep_services_first
-from scheduling_core import PeriodConfig
+from scheduler import schedule_iep_services_first, suggest_service_slots
+from scheduling_core import PeriodConfig, day_index, format_range
 # ---------------------------------------------------------------------------
 # App setup
 # ---------------------------------------------------------------------------
@@ -60,13 +63,21 @@ load_dotenv()
 app = FastAPI(title="CompliWise Scheduler Engine")
 
 app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.environ["SESSION_SECRET"],
+    session_cookie="compliwise_session",
+    max_age=60 * 60 * 8,  # 8 hours, roughly a school day
+    same_site="lax",
+    https_only=os.getenv("COOKIE_SECURE", "false").lower() == "true",
+)
+
+app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5173").split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-CURRENT_USER = None
 
 
 # ---------------------------------------------------------------------------
@@ -80,14 +91,15 @@ def get_db():
     finally:
         db.close()
 
-def get_current_user(db: Session = Depends(get_db)) -> User:
-    if CURRENT_USER is None:
+def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
+    user_id = request.session.get("user_id")
+    if not user_id:
         raise HTTPException(status_code=401, detail="Not logged in")
 
-    user = db.query(User).filter(User.id == CURRENT_USER).first()
-
+    user = db.query(User).filter(User.id == UUID(user_id)).first()
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        request.session.clear()
+        raise HTTPException(status_code=401, detail="Session no longer valid")
 
     return user
 
@@ -125,6 +137,10 @@ class StudentUpdate(BaseModel):
     has_iep: bool | None = None
     mtss_tier: str | None = None
 
+ALLOWED_STUDENT_FIELDS = {
+    "first_name", "last_name", "grade", "homeroom", "has_iep", "mtss_tier",
+}
+
 class StaffCreate(BaseModel):
     school_id: str
     first_name: str
@@ -147,18 +163,31 @@ class CreateUserRequest(BaseModel):
     staff_id: str | None = None  # optional — not every user needs a staff record
 
 class ScheduleGenerationConfig(BaseModel):
-    periods: list[dict[str, Any]]
-    grade_groups: list[dict[str, Any]]          # NEW — required
+    """Shape read by PeriodConfig.from_config() -- see scheduling_core.py."""
+    grade_schedules: list[dict[str, Any]]                  # the master schedule, per grade
+    block_policies: list[dict[str, Any]] = []              # optional overrides of the default rules
     pullout_constraints: dict[str, Any]
     specials_requirements: list[dict[str, Any]]
+
+# Fields a manual edit may change on a schedule entry. Anything else
+# (run_id, student_id, school_id, ...) is rejected rather than written.
+ALLOWED_SCHEDULE_ENTRY_FIELDS = {
+    "staff_id", "subject", "room", "day_of_week", "period_label",
+    "start_minute", "end_minute", "service_type", "delivery",
+    "block_subject", "is_flex_period", "status",
+}
+VALID_DELIVERIES = {"pullout", "push_in", "class"}
+
+FULL_SCHEDULE_RUN_NAME = "Full School Schedule"
     
 SCHEDULE_JOBS: dict[str, dict] = {}
 
+# Index = the stage number scheduler.py passes to progress_callback.
 SCHEDULE_STAGES = [
-    "Scheduling mandated IEP/ENL/related services",
-    "Building homeroom classes",
-    "Scheduling Specials (PE/Music/Art)",
+    "Placing mandated IEP/ENL/related services",
+    "Assigning Specials teachers (PE/Music/Art)",
     "Building FLEX groups",
+    "Filling homeroom blocks from the master schedule",
     "Running compliance validation",
     "Building schedule proposals",
     "Saving schedule to database",
@@ -193,6 +222,77 @@ def _jsonable(data: dict) -> dict:
         else:
             result[key] = value
     return result
+
+
+def _entry_time_fields(entry) -> dict:
+    """Time/delivery fields shared by every endpoint that returns
+    schedule entries. Rows saved before the master-schedule migration
+    have no end_minute, so time_range is None for them."""
+    has_times = entry.start_minute is not None and entry.end_minute is not None
+    return {
+        "start_minute": entry.start_minute,
+        "end_minute": entry.end_minute,
+        "time_range": format_range(entry.start_minute, entry.end_minute) if has_times else None,
+        "delivery": entry.delivery,
+        "block_subject": entry.block_subject,
+        "room": entry.room,
+    }
+
+
+def _latest_full_run(db: Session) -> ScheduleRun | None:
+    return (
+        db.query(ScheduleRun)
+        .filter(ScheduleRun.name == FULL_SCHEDULE_RUN_NAME)
+        .order_by(ScheduleRun.created_at.desc())
+        .first()
+    )
+
+
+def _run_period_config(run: ScheduleRun) -> PeriodConfig:
+    """The master schedule a run was BUILT with. Checking a run against
+    today's defaults instead would silently judge it by the wrong bell
+    schedule, so a run without one is an error, not a fallback."""
+    payload = (run.summary_json or {}).get("period_config")
+    if not payload:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This schedule run was generated before master schedules were "
+                "saved with runs. Regenerate the schedule first."
+            ),
+        )
+    try:
+        return PeriodConfig.from_config(payload)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This run's saved master schedule is no longer valid: {error}",
+        )
+
+
+def _run_entries_as_dicts(db: Session, run_id) -> list[dict]:
+    """A run's saved entries in the shape compliance.py / scheduler.py
+    read. student_id is the DB UUID (str), matching students keyed by
+    their "id"."""
+    return [
+        {
+            "student_id": str(e.student_id),
+            "day_of_week": e.day_of_week,
+            "period": e.period,
+            "start_minute": e.start_minute,
+            "end_minute": e.end_minute,
+            "subject": e.subject,
+            "block_subject": e.block_subject,
+            "teacher": e.teacher_name,
+            "room": e.room,
+            "service_type": e.service_type,
+            "delivery": e.delivery,
+            "is_pullout": e.is_pullout,
+            "is_flex_period": e.is_flex_period,
+            "grade": e.grade,
+        }
+        for e in db.query(ScheduleEntry).filter(ScheduleEntry.run_id == run_id).all()
+    ]
 
 
 def write_audit_log(
@@ -230,7 +330,6 @@ def write_audit_log(
 
 @app.post("/login")
 def login(data: LoginRequest, request: Request, db: Session = Depends(get_db)):
-    global CURRENT_USER
 
     user = db.query(User).filter(User.email == data.email).first()
 
@@ -244,7 +343,8 @@ def login(data: LoginRequest, request: Request, db: Session = Depends(get_db)):
         )
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    CURRENT_USER = user.id
+    request.session.clear()
+    request.session["user_id"] = str(user.id)
 
     write_audit_log(
         db,
@@ -259,6 +359,20 @@ def login(data: LoginRequest, request: Request, db: Session = Depends(get_db)):
         "role": user.role,
         "staff_id": str(user.staff_id) if user.staff_id else None,
     }
+
+
+@app.post("/logout")
+def logout(request: Request, db: Session = Depends(get_db)):
+    user_id = request.session.get("user_id")
+    request.session.clear()
+    if user_id:
+        write_audit_log(
+            db,
+            action="Logout",
+            user_id=UUID(user_id),
+            ip_address=request.client.host if request.client else None,
+        )
+    return {"success": True}
 
 @app.get("/setup/status")
 def get_setup_status(db: Session = Depends(get_db)):
@@ -446,8 +560,12 @@ def update_student(student_id: str, student: StudentUpdate):
         if not db_student:
             raise HTTPException(status_code=404, detail="Student not found")
 
-        for key, value in student.dict().items():
-            setattr(db_student, key, value)
+        # exclude_unset: only fields the client actually sent. Plain
+        # .dict() includes every unsent field as None and would wipe
+        # grade/homeroom whenever someone edits just a name.
+        for key, value in student.dict(exclude_unset=True).items():
+            if key in ALLOWED_STUDENT_FIELDS:
+                setattr(db_student, key, value)
 
         db.commit()
         db.refresh(db_student)
@@ -480,6 +598,7 @@ def get_student_schedule(student_id: str):
                 "service_type": e.service_type,
                 "is_pullout": e.is_pullout,
                 "is_flex_period": e.is_flex_period,
+                **_entry_time_fields(e),
             }
             for e in entries
         ]
@@ -491,8 +610,13 @@ def get_student_schedule(student_id: str):
 @app.get("/me/students")
 def get_my_students(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """
-    Returns the teacher's classes grouped by day/period, so it answers
-    "who's in my class this period" rather than just a flat student list.
+    Returns the teacher's classes grouped by day and time, so it answers
+    "who's in my class right now" rather than just a flat student list.
+
+    Entries are split around pull-outs (a student pulled 11:00-11:30
+    has an ELA piece starting 11:30), so a class is every entry with
+    the same day/subject/service/room whose times overlap -- not every
+    entry with the same start time.
     """
     if user.role != "teacher":
         raise HTTPException(status_code=403, detail="Not allowed")
@@ -507,40 +631,62 @@ def get_my_students(user: User = Depends(get_current_user), db: Session = Depend
         .all()
     )
 
-    # Group entries into classes keyed by (day, period, subject, service_type)
-    # so students who share the same slot/class show up together, the same
-    # way staff_schedule is built during generation.
-    classes: dict = {}
+    def bounds(entry):
+        start = entry.start_minute if entry.start_minute is not None else entry.period
+        end = entry.end_minute if entry.end_minute is not None else start + 1
+        return start, end
 
+    buckets: dict = {}
     for entry, student in rows:
-        key = (entry.day_of_week, entry.period, entry.subject, entry.service_type)
+        key = (entry.day_of_week, entry.subject, entry.service_type, entry.room)
+        buckets.setdefault(key, []).append((entry, student))
 
-        if key not in classes:
-            classes[key] = {
-                "day_of_week": entry.day_of_week,
-                "period": entry.period,
-                "period_label": entry.period_label,
-                "subject": entry.subject,
-                "service_type": entry.service_type,
-                "is_pullout": entry.is_pullout,
-                "is_flex_period": entry.is_flex_period,
-                "students": [],
-            }
+    classes: list = []
+    for items in buckets.values():
+        items.sort(key=lambda pair: bounds(pair[0])[0])
+        current = None
+        for entry, student in items:
+            start, end = bounds(entry)
+            if current is None or start >= current["end_minute"]:
+                current = {
+                    "day_of_week": entry.day_of_week,
+                    "period": start,
+                    "start_minute": start,
+                    "end_minute": end,
+                    "period_label": entry.period_label,
+                    "subject": entry.subject,
+                    "block_subject": entry.block_subject,
+                    "service_type": entry.service_type,
+                    "delivery": entry.delivery,
+                    "room": entry.room,
+                    "is_pullout": entry.is_pullout,
+                    "is_flex_period": entry.is_flex_period,
+                    "students": [],
+                    "_ids": set(),
+                }
+                classes.append(current)
+            current["end_minute"] = max(current["end_minute"], end)
+            if student.id in current["_ids"]:
+                continue
+            current["_ids"].add(student.id)
+            current["students"].append({
+                "id": str(student.id),
+                "first_name": student.first_name,
+                "last_name": student.last_name,
+                "grade": student.grade,
+                "homeroom": student.homeroom,
+                "has_iep": student.has_iep,
+                "mtss_tier": student.mtss_tier,
+                "enl_level": student.enl_level,
+            })
 
-        classes[key]["students"].append({
-            "id": str(student.id),
-            "first_name": student.first_name,
-            "last_name": student.last_name,
-            "grade": student.grade,
-            "homeroom": student.homeroom,
-            "has_iep": student.has_iep,
-            "mtss_tier": student.mtss_tier,
-            "enl_level": student.enl_level,
-        })
+    for c in classes:
+        del c["_ids"]
+        c["time_range"] = format_range(c["start_minute"], c["end_minute"])
 
     return sorted(
-        classes.values(),
-        key=lambda c: (DAYS.index(c["day_of_week"]), c["period"]),
+        classes,
+        key=lambda c: (day_index(c["day_of_week"]), c["start_minute"]),
     )
 
 
@@ -671,6 +817,77 @@ def list_student_services(student_id: str, user: User = Depends(get_current_user
         ]
     finally:
         db.close()
+
+
+@app.get("/students/{student_id}/services/{service_id}/suggestions")
+def suggest_times_for_service(
+    student_id: str,
+    service_id: str,
+    top_n: int = 5,
+    user: User = Depends(get_current_user),
+):
+    """
+    "When could this happen?" -- the best open times for one session of
+    this service, ranked against the latest generated schedule. The
+    student's own class time counts as free (that's what a pull-out
+    replaces); providers' existing bookings count as busy.
+    """
+    if user.role not in ("admin", "principal"):
+        raise HTTPException(status_code=403, detail="Not allowed")
+
+    try:
+        student_uuid, service_uuid = UUID(student_id), UUID(service_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Service not found")
+
+    db = SessionLocal()
+    try:
+        service = (
+            db.query(StudentService)
+            .filter(StudentService.id == service_uuid, StudentService.student_id == student_uuid)
+            .first()
+        )
+        if not service:
+            raise HTTPException(status_code=404, detail="Service not found")
+
+        run = _latest_full_run(db)
+        if not run:
+            raise HTTPException(status_code=409, detail="Generate a schedule first.")
+        period_config = _run_period_config(run)
+        entries = _run_entries_as_dicts(db, run.id)
+    finally:
+        db.close()
+
+    try:
+        students = get_students()
+        staff = get_staff()
+    except (DBConfigError, DBAPIError) as error:
+        raise HTTPException(status_code=500, detail=str(error))
+
+    student = next((s for s in students if str(s.get("id")) == student_id), None)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    try:
+        suggestions = suggest_service_slots(
+            entries=entries,
+            # entries carry the DB UUID as student_id; match it
+            student={**student, "student_id": student_id},
+            service={
+                "service_type": service.service_type,
+                "subject": service.service_type,
+                "minutes": service.minutes_per_week,
+                "is_pullout": service.is_pullout,
+                "subject_area": service.subject_area,
+            },
+            staff_members=staff,
+            period_config=period_config,
+            top_n=max(1, min(top_n, 20)),
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
+    return {"run_id": str(run.id), "suggestions": suggestions}
 
 
 @app.put("/students/{student_id}/services/{service_id}")
@@ -813,7 +1030,9 @@ def update_staff(staff_id: str, payload: StaffUpdate):
         if not staff:
             raise HTTPException(status_code=404, detail="Staff not found")
 
-        for field, value in payload.dict().items():
+        # exclude_unset: toggling one certification must not null out
+        # grade (a known root cause of bad staff matching).
+        for field, value in payload.dict(exclude_unset=True).items():
             if field in ALLOWED_STAFF_FIELDS:
                 setattr(staff, field, value)
 
@@ -856,6 +1075,7 @@ def my_schedule(user: User = Depends(get_current_user), db: Session = Depends(ge
             "service_type": e.service_type,
             "is_pullout": e.is_pullout,
             "is_flex_period": e.is_flex_period,
+            **_entry_time_fields(e),
         }
         for e in entries
     ]
@@ -897,6 +1117,7 @@ def list_schedule_entries(run_id: str | None = None):
                 "service_type": entry.service_type,
                 "is_pullout": entry.is_pullout,
                 "is_flex_period": entry.is_flex_period,
+                **_entry_time_fields(entry),
             }
             for entry, student, staff in results
         ]
@@ -911,18 +1132,56 @@ def update_schedule_entry(
     request: Request,
     user: User = Depends(get_current_user),
 ):
+    unknown = set(payload) - ALLOWED_SCHEDULE_ENTRY_FIELDS
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"These fields can't be edited: {sorted(unknown)}",
+        )
+
     db = SessionLocal()
     try:
         entry = db.query(ScheduleEntry).filter(ScheduleEntry.id == entry_id).first()
         if not entry:
             raise HTTPException(status_code=404, detail="Not found")
 
-        before = _jsonable({
-            key: getattr(entry, key) for key in payload.keys() if hasattr(entry, key)
-        })
+        before = _jsonable({key: getattr(entry, key) for key in payload})
+
+        if "delivery" in payload and payload["delivery"] not in VALID_DELIVERIES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"delivery must be one of {sorted(VALID_DELIVERIES)}",
+            )
 
         for key, value in payload.items():
+            if key == "staff_id":
+                continue  # resolved below so teacher_name stays in sync
             setattr(entry, key, value)
+
+        # Reassigning a teacher goes through staff_id; teacher_name is
+        # derived from it so the two can never disagree.
+        if "staff_id" in payload:
+            if payload["staff_id"]:
+                try:
+                    staff_uuid = UUID(str(payload["staff_id"]))
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="staff_id is not a valid id")
+                staff = db.query(StaffMember).filter(StaffMember.id == staff_uuid).first()
+                if not staff:
+                    raise HTTPException(status_code=404, detail="Staff member not found")
+                entry.staff_id = staff.id
+                entry.teacher_name = f"{staff.first_name} {staff.last_name}".strip()
+            else:
+                entry.staff_id = None
+                entry.teacher_name = ""
+
+        # is_pullout is derived from delivery, never set on its own.
+        if "delivery" in payload:
+            entry.is_pullout = payload["delivery"] == "pullout"
+        # `period` is the start minute; keep the two in lockstep so the
+        # (run, student, day, period) unique constraint stays meaningful.
+        if "start_minute" in payload:
+            entry.period = payload["start_minute"]
 
         db.commit()
         db.refresh(entry)
@@ -941,6 +1200,64 @@ def update_schedule_entry(
 
         return {"success": True, "id": str(entry.id)}
     
+    finally:
+        db.close()
+
+
+@app.get("/staff-schedule")
+def list_staff_schedule_entries(
+    run_id: str | None = None,
+    staff_id: str | None = None,
+    user: User = Depends(get_current_user),
+):
+    """Saved teacher schedules: one row per teacher per class/session,
+    including prep and lunch. Defaults to the latest full run. Teachers
+    only ever get their own rows."""
+    db = SessionLocal()
+    try:
+        if user.role not in ("admin", "principal"):
+            if not user.staff_id:
+                raise HTTPException(status_code=400, detail="Account is not linked to a staff member")
+            staff_id = str(user.staff_id)
+
+        try:
+            if run_id:
+                run_uuid = UUID(run_id)
+            else:
+                run = _latest_full_run(db)
+                if not run:
+                    return []
+                run_uuid = run.id
+            staff_uuid = UUID(staff_id) if staff_id else None
+        except ValueError:
+            raise HTTPException(status_code=400, detail="run_id / staff_id is not a valid id")
+
+        query = db.query(StaffScheduleEntry).filter(StaffScheduleEntry.run_id == run_uuid)
+        if staff_uuid:
+            query = query.filter(StaffScheduleEntry.staff_id == staff_uuid)
+
+        entries = query.all()
+        entries.sort(key=lambda e: (e.teacher_name or "", day_index(e.day_of_week), e.start_minute))
+
+        return [
+            {
+                "id": str(e.id),
+                "run_id": str(e.run_id),
+                "staff_id": str(e.staff_id) if e.staff_id else None,
+                "staff_name": e.teacher_name,
+                "day_of_week": e.day_of_week,
+                "period": e.period,
+                "period_label": e.period_label,
+                "subject": e.subject,
+                "grade": e.grade,
+                "service_type": e.service_type,
+                "is_pullout": e.is_pullout,
+                "is_flex_period": e.is_flex_period,
+                "student_count": e.student_count,
+                **_entry_time_fields(e),
+            }
+            for e in entries
+        ]
     finally:
         db.close()
 
@@ -968,6 +1285,38 @@ def preview_priority():
 
     except (DBConfigError, DBAPIError) as error:
         raise HTTPException(status_code=500, detail=str(error))
+
+
+@app.get("/schedule/config-defaults")
+def get_schedule_config_defaults(user: User = Depends(get_current_user)):
+    """
+    Prefill for the Generate Schedule modal: the master schedule and
+    rules from the most recent full run, so the principal doesn't
+    re-enter them every time -- or the built-in defaults if there's no
+    usable run yet.
+    """
+    db = SessionLocal()
+    try:
+        run = _latest_full_run(db)
+        payload = (run.summary_json or {}).get("period_config") if run else None
+    finally:
+        db.close()
+
+    if payload:
+        try:
+            # Round-tripped rather than returned as saved, so a run made
+            # with weekday names comes back as cycle days (A-E).
+            config = PeriodConfig.from_config(payload).to_config_payload()
+            return {"source": "last_run", "run_id": str(run.id), "config": config}
+        except ValueError as error:
+            return {
+                "source": "defaults",
+                "warning": f"The last run's master schedule couldn't be loaded ({error}); showing defaults.",
+                "config": PeriodConfig().to_config_payload(),
+            }
+
+    return {"source": "defaults", "config": PeriodConfig().to_config_payload()}
+
 
 @app.get("/schedule-runs")
 def list_schedule_runs(user: User = Depends(get_current_user)):
@@ -1056,6 +1405,7 @@ def get_schedule_run(run_id: str, user: User = Depends(get_current_user)):
                     "service_type": entry.service_type,
                     "is_pullout": entry.is_pullout,
                     "is_flex_period": entry.is_flex_period,
+                    **_entry_time_fields(entry),
                 }
                 for entry, student, staff in entries
             ],
@@ -1072,6 +1422,20 @@ def get_schedule_run(run_id: str, user: User = Depends(get_current_user)):
         }
     finally:
         db.close()
+
+
+def _run_summary(result: dict, period_config: PeriodConfig, critical_flags: list) -> dict:
+    """What gets stored in ScheduleRun.summary_json. period_config is
+    saved so the run can be re-checked against the master schedule it
+    was built with, and so the modal can prefill from it."""
+    return {
+        "compliance_check_passed": len(critical_flags) == 0,
+        "open_critical_flags": len(critical_flags),
+        "status": "draft",
+        "summary": result["summary"],
+        "period_config": period_config.to_config_payload(),
+        "service_placement_report": result["service_placement_report"],
+    }
 
 
 @app.post("/save-schedule")
@@ -1094,6 +1458,7 @@ def save_schedule(config: ScheduleGenerationConfig):
         )
 
         schedule_entries = result["schedule_entries"]
+        staff_schedule_entries = result["staff_schedule_entries"]
         compliance_flags = result["compliance_flags"]
         flex_groups = result["flex_groups"]
         flex_group_students = result["flex_group_students"]
@@ -1102,16 +1467,12 @@ def save_schedule(config: ScheduleGenerationConfig):
 
         schedule_run_id = create_schedule_run(
             school_year=school_year,
-            name="Full School Schedule",
-            summary={
-                "compliance_check_passed": len(critical_flags) == 0,
-                "open_critical_flags": len(critical_flags),
-                "status": "draft",
-                "summary": result["summary"],
-            },
+            name=FULL_SCHEDULE_RUN_NAME,
+            summary=_run_summary(result, period_config, critical_flags),
         )
 
         create_schedule_entries(schedule_entries, run_id=schedule_run_id)
+        create_staff_schedule_entries(staff_schedule_entries, run_id=schedule_run_id)
         create_compliance_flags(compliance_flags, run_id=schedule_run_id)
         create_flex_groups(flex_groups, run_id=schedule_run_id)
         create_flex_group_students(flex_group_students, run_id=schedule_run_id)
@@ -1121,6 +1482,7 @@ def save_schedule(config: ScheduleGenerationConfig):
             "summary": result["summary"],
             "saved": {
                 "schedule_entries": len(schedule_entries),
+                "staff_schedule_entries": len(staff_schedule_entries),
                 "compliance_flags": len(compliance_flags),
                 "flex_groups": len(flex_groups),
                 "flex_group_students": len(flex_group_students),
@@ -1175,11 +1537,15 @@ def _run_schedule_job(job_id: str, config: ScheduleGenerationConfig, user_id=Non
             SCHEDULE_JOBS[job_id].update({"status": "error", "error": str(error)})
             return
 
-        print(f"[schedule job {job_id}] period_config: periods={period_config.periods} "
-              f"group_periods={period_config.group_periods} "
-              f"blackout={period_config.blackout_periods} "
+        # Log the config that will actually be used, so a field that
+        # never reached the engine shows up here instead of silently.
+        print(f"[schedule job {job_id}] master schedule: "
+              f"grades={period_config.grades} "
+              f"pullout_blocks={sorted(s for s, p in period_config.block_policies.items() if p['allow_pullout'])} "
+              f"pushin_blocks={sorted(s for s, p in period_config.block_policies.items() if p['allow_pushin'])} "
               f"min_gap={period_config.min_gap_minutes} "
-              f"max_pullouts={period_config.max_pullouts_per_day}")
+              f"max_pullouts={period_config.max_pullouts_per_day} "
+              f"specials={period_config.specials_sessions_per_week}")
         
         students = get_students()
         staff = get_staff()
@@ -1190,9 +1556,10 @@ def _run_schedule_job(job_id: str, config: ScheduleGenerationConfig, user_id=Non
             staff_members=staff,
             school_year=school_year,
             period_config=period_config,
-            progress_callback=progress,  # see note below — needs threading into scheduler.py
+            progress_callback=progress,
         )
         schedule_entries = result["schedule_entries"]
+        staff_schedule_entries = result["staff_schedule_entries"]
         compliance_flags = result["compliance_flags"]
         flex_groups = result["flex_groups"]
         flex_group_students = result["flex_group_students"]
@@ -1201,17 +1568,13 @@ def _run_schedule_job(job_id: str, config: ScheduleGenerationConfig, user_id=Non
 
         schedule_run_id = create_schedule_run(
             school_year=school_year,
-            name="Full School Schedule",
-            summary={
-                "compliance_check_passed": len(critical_flags) == 0,
-                "open_critical_flags": len(critical_flags),
-                "status": "draft",
-                "summary": result["summary"],
-            },
+            name=FULL_SCHEDULE_RUN_NAME,
+            summary=_run_summary(result, period_config, critical_flags),
         )
 
         progress(6, "Saving schedule to database")
         create_schedule_entries(schedule_entries, run_id=schedule_run_id)
+        create_staff_schedule_entries(staff_schedule_entries, run_id=schedule_run_id)
         create_compliance_flags(compliance_flags, run_id=schedule_run_id)
         create_flex_groups(flex_groups, run_id=schedule_run_id)
         create_flex_group_students(flex_group_students, run_id=schedule_run_id)
@@ -1224,6 +1587,7 @@ def _run_schedule_job(job_id: str, config: ScheduleGenerationConfig, user_id=Non
                 "summary": result["summary"],
                 "saved": {
                     "schedule_entries": len(schedule_entries),
+                    "staff_schedule_entries": len(staff_schedule_entries),
                     "compliance_flags": len(compliance_flags),
                     "flex_groups": len(flex_groups),
                     "flex_group_students": len(flex_group_students),
@@ -1352,73 +1716,37 @@ def list_compliance_flags():
 @app.post("/run-compliance-check")
 def run_compliance_check(user: User = Depends(get_current_user)):
     """
-    Runs every compliance check against the CURRENTLY SAVED schedule
-    plus overall staffing levels, and PERSISTS the resulting flags
-    to the database so they show up in /compliance-flags and the
-    dashboard feed. Does not touch schedule_entries -- only reads them.
+    Re-runs every compliance check against the LATEST generated schedule
+    (only that run's entries, judged by the master schedule that run was
+    built with) plus overall staffing levels, and PERSISTS the resulting
+    flags so they show up in /compliance-flags and the dashboard feed.
+    Does not touch schedule_entries -- only reads them.
     """
     try:
         students = get_students()
         staff = get_staff()
-        period_config = PeriodConfig()
-
         students_by_id = {s["id"]: s for s in students if s.get("id")}
 
         db = SessionLocal()
         try:
-            saved_entries = db.query(ScheduleEntry).all()
+            run = _latest_full_run(db)
+            if not run:
+                raise HTTPException(status_code=409, detail="No generated schedule to check yet.")
+            period_config = _run_period_config(run)
+            entries = _run_entries_as_dicts(db, run.id)
         finally:
             db.close()
 
-        entries = [
-            {
-                "student_id": str(e.student_id),
-                "day_of_week": e.day_of_week,
-                "period": e.period,
-                "subject": e.subject,
-                "teacher": e.teacher_name,
-                "service_type": e.service_type,
-                "is_pullout": e.is_pullout,
-                "is_flex_period": e.is_flex_period,
-            }
-            for e in saved_entries
-        ]
-
-        staff_schedule: dict = {}
-        for entry in entries:
-            teacher = entry["teacher"]
-            if not teacher:
-                continue
-            student = students_by_id.get(entry["student_id"], {})
-            student_name = f"{student.get('first_name', '')} {student.get('last_name', '')}".strip()
-
-            staff_schedule.setdefault(teacher, {}) \
-                          .setdefault(entry["day_of_week"], {}) \
-                          .setdefault(entry["period"], [])
-
-            blocks = staff_schedule[teacher][entry["day_of_week"]][entry["period"]]
-            block = next(
-                (b for b in blocks if b["subject"] == entry["subject"] and b["service_type"] == entry["service_type"]),
-                None,
+        try:
+            flags = run_all_compliance_checks(
+                entries=entries,
+                students_by_id=students_by_id,
+                period_config=period_config,
+                students=students,
+                staff_members=staff,
             )
-            if block is None:
-                block = {
-                    "subject": entry["subject"],
-                    "service_type": entry["service_type"],
-                    "is_pullout": entry["is_pullout"],
-                    "students": [],
-                }
-                blocks.append(block)
-            block["students"].append({"student_id": entry["student_id"], "student_name": student_name})
-
-        flags = run_all_compliance_checks(
-            entries=entries,
-            staff_schedule=staff_schedule,
-            students_by_id=students_by_id,
-            period_config=period_config,
-            students=students,
-            staff_members=staff,
-        )
+        except ValueError as error:  # e.g. entries saved before the migration
+            raise HTTPException(status_code=409, detail=str(error))
 
         critical_count = sum(1 for f in flags if f.get("severity") == "critical")
         warning_count = sum(1 for f in flags if f.get("severity") == "warning")
@@ -1432,6 +1760,7 @@ def run_compliance_check(user: User = Depends(get_current_user)):
                 "compliance_check_passed": critical_count == 0,
                 "open_critical_flags": critical_count,
                 "status": "compliance_check",
+                "checked_run_id": str(run.id),
             },
         )
 
@@ -1445,6 +1774,7 @@ def run_compliance_check(user: User = Depends(get_current_user)):
                 "critical": critical_count,
                 "warnings": warning_count,
             },
+            "checked_run_id": str(run.id),
             "schedule_run_id": schedule_run_id,
         }
 
@@ -1515,6 +1845,12 @@ def list_flex_groups():
                 "day_of_week": fg.day_of_week,
                 "period": fg.period,
                 "period_label": fg.period_label,
+                "start_minute": fg.start_minute,
+                "end_minute": fg.end_minute,
+                "time_range": (
+                    format_range(fg.start_minute, fg.end_minute)
+                    if fg.start_minute is not None and fg.end_minute is not None else None
+                ),
                 "student_id": str(s.id),
                 "student_name": f"{s.first_name} {s.last_name}".strip(),
             }
@@ -1534,7 +1870,7 @@ def list_audit_logs(
     limit: int = 100,
     user: User = Depends(get_current_user),
 ):
-    if user.role not in ("admin"):
+    if user.role != "admin":
         raise HTTPException(status_code=403, detail="Not allowed")
 
     db = SessionLocal()

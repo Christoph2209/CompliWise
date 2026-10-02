@@ -1,5 +1,6 @@
 # database_service.py
 
+import logging
 import uuid
 from typing import Any, Dict, List
 
@@ -11,11 +12,14 @@ from dmscheduler_db import (
     StudentService,
     ScheduleRun,
     ScheduleEntry,
+    StaffScheduleEntry,
     ComplianceFlag,
     FlexGroup,
     FlexGroupStudent,
     User,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class DBConfigError(RuntimeError):
@@ -87,6 +91,10 @@ def get_students(
                     "service_type": svc.service_type,
                     "minutes": svc.minutes_per_week,
                     "is_pullout": svc.is_pullout,
+                    # Which class a push-in goes into (e.g. SETSS "Math").
+                    # Without it the engine falls back to the service's
+                    # default push-in subjects.
+                    "subject_area": svc.subject_area,
                 })
 
         return [
@@ -207,6 +215,9 @@ def _find_student_by_scheduler_id(db, student_id: str):
         return None
 
 
+def _optional_int(value):
+    return int(value) if value is not None else None
+
 
 def create_flex_group_students(
     flex_group_students: List[Dict[str, Any]],
@@ -224,6 +235,7 @@ def create_flex_group_students(
             .filter(FlexGroup.run_id == run_uuid)
             .all()
         )
+        # period is the block's start minute on both sides of this match
         flex_group_index = {
             (fg.name, fg.day_of_week, fg.period): fg.id
             for fg in flex_groups_in_run
@@ -233,19 +245,18 @@ def create_flex_group_students(
 
         rows = []
         seen = set()  # guard against duplicates within this batch
+        unmatched = 0
 
         for row in flex_group_students:
             student = student_index.get(str(row.get("student_id")))
-            if not student:
-                continue
-
             flex_group_id = flex_group_index.get((
                 row.get("group_name"),
                 row.get("day_of_week"),
                 row.get("period"),
             ))
-            if not flex_group_id:
-                continue  # no matching flex group saved for this run
+            if not student or not flex_group_id:
+                unmatched += 1
+                continue
 
             dedup_key = (flex_group_id, student.id)
             if dedup_key in seen:
@@ -258,9 +269,15 @@ def create_flex_group_students(
                 student_id=student.id,
             ))
 
+        if unmatched:
+            logger.warning(
+                "create_flex_group_students: %d row(s) in run %s matched no student "
+                "or no saved FLEX group and were NOT saved", unmatched, run_id,
+            )
+
         db.add_all(rows)
         db.commit()
-        return {"saved_count": len(rows), "run_id": run_id}
+        return {"saved_count": len(rows), "skipped_count": unmatched, "run_id": run_id}
     except Exception:
         db.rollback()
         raise
@@ -292,11 +309,13 @@ def create_schedule_entries(
         staff_index = _build_staff_index(db)
 
         rows = []
+        unmatched_students = set()
 
         for entry in entries:
             student = student_index.get(str(entry.get("student_id")))
 
             if not student:
+                unmatched_students.add(str(entry.get("student_id")))
                 continue
 
             teacher_name = entry.get("teacher") or ""
@@ -317,8 +336,14 @@ def create_schedule_entries(
                 teacher_name=teacher_name,
 
                 day_of_week=entry.get("day_of_week"),
-                period=int(entry.get("period")),
+                period=int(entry.get("period")),           # == start_minute
                 period_label=entry.get("period_label") or None,
+
+                # master-schedule time model
+                start_minute=_optional_int(entry.get("start_minute")),
+                end_minute=_optional_int(entry.get("end_minute")),
+                delivery=entry.get("delivery"),
+                block_subject=entry.get("block_subject"),
 
                 subject=entry.get("subject") or "General Education",
                 room=entry.get("room") or "",
@@ -331,14 +356,96 @@ def create_schedule_entries(
                 source="scheduler",
             ))
 
+        if unmatched_students:
+            logger.warning(
+                "create_schedule_entries: %d student id(s) in run %s matched no Student "
+                "row; their entries were NOT saved: %s",
+                len(unmatched_students), run_id, sorted(unmatched_students)[:10],
+            )
+
         db.add_all(rows)
         db.commit()
 
         return {
             "saved_count": len(rows),
+            "skipped_count": len(entries) - len(rows),
             "run_id": run_id,
         }
 
+    finally:
+        db.close()
+
+
+def create_staff_schedule_entries(
+    entries: List[Dict[str, Any]],
+    run_id: str,
+) -> Dict[str, Any]:
+    """Saves the scheduler's staff_schedule_entries (one row per teacher
+    per class/session) for a run."""
+    if not entries:
+        return {"saved_count": 0, "run_id": run_id}
+
+    db = SessionLocal()
+
+    try:
+        school = get_default_school(db)
+        run_uuid = uuid.UUID(run_id)
+        staff_index = _build_staff_index(db)
+
+        rows = []
+        unmatched_staff = set()
+
+        for entry in entries:
+            teacher_name = entry.get("teacher") or ""
+            staff = staff_index.get(teacher_name)
+
+            if not staff:
+                # Still saved, by name -- same as a ScheduleEntry whose
+                # teacher matches no StaffMember row.
+                unmatched_staff.add(teacher_name)
+
+            rows.append(StaffScheduleEntry(
+                id=uuid.uuid4(),
+                school_id=school.id,
+                run_id=run_uuid,
+
+                staff_id=staff.id if staff else None,
+                teacher_name=teacher_name,
+
+                day_of_week=entry.get("day_of_week"),
+                period=int(entry.get("period")),           # == start_minute
+                period_label=entry.get("period_label") or None,
+                start_minute=int(entry.get("start_minute")),
+                end_minute=int(entry.get("end_minute")),
+
+                subject=entry.get("subject") or "General Education",
+                block_subject=entry.get("block_subject"),
+                room=entry.get("room") or "",
+                grade=entry.get("grade"),
+
+                service_type=entry.get("service_type"),
+                delivery=entry.get("delivery"),
+                is_pullout=bool(entry.get("is_pullout")),
+                is_flex_period=bool(entry.get("is_flex_period")),
+
+                student_count=int(entry.get("student_count") or 0),
+            ))
+
+        if unmatched_staff:
+            logger.warning(
+                "create_staff_schedule_entries: %d teacher name(s) in run %s matched no "
+                "StaffMember row; their rows were saved without a staff_id: %s",
+                len(unmatched_staff), run_id, sorted(unmatched_staff)[:10],
+            )
+
+        db.add_all(rows)
+        db.commit()
+
+        return {"saved_count": len(rows), "run_id": run_id}
+
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 
@@ -444,8 +551,10 @@ def create_flex_groups(
                 teacher_name=teacher_name,
 
                 day_of_week=group.get("day_of_week"),
-                period=int(group.get("period")) if group.get("period") else None,
+                period=_optional_int(group.get("period")),   # == start_minute
                 period_label=group.get("period_label") or None,
+                start_minute=_optional_int(group.get("start_minute")),
+                end_minute=_optional_int(group.get("end_minute")),
 
                 max_group_size=int(group.get("max_group_size") or 10),
                 status=group.get("status") or "active",
@@ -481,6 +590,10 @@ def get_schedule_entries() -> List[Dict[str, Any]]:
                 "day_of_week": entry.day_of_week,
                 "period": entry.period,
                 "period_label": entry.period_label,
+                "start_minute": entry.start_minute,
+                "end_minute": entry.end_minute,
+                "delivery": entry.delivery,
+                "block_subject": entry.block_subject,
                 "subject": entry.subject,
                 "teacher": entry.teacher_name,
                 "room": entry.room,
@@ -518,6 +631,8 @@ def get_flex_groups(active_only: bool = True) -> List[Dict[str, Any]]:
                 "day_of_week": group.day_of_week,
                 "period": group.period,
                 "period_label": group.period_label,
+                "start_minute": group.start_minute,
+                "end_minute": group.end_minute,
                 "max_group_size": group.max_group_size,
                 "status": group.status,
             }
@@ -575,51 +690,3 @@ def delete_entity_many(entity_name: str, query: dict):
 
     finally:
         db.close()
-
-def get_student_services(student: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """
-    Mandated, individually-scheduled services only.
-
-    NOTE: FLEX for MTSS tier_2/tier_3 students is intentionally NOT
-    generated here. It's handled entirely by build_flex_groups() /
-    apply_flex_groups_to_schedule() in scheduler.py. Do not re-add a
-    FLEX block here.
-    """
-    services = []
-
-    db_services = student.get("services")
-
-    if db_services:
-        for service in db_services:
-            services.append({
-                "subject": service.get("subject") or service.get("service_type") or "IEP Support",
-                "service_type": service.get("service_type") or "SETSS",
-                "minutes": int(service.get("minutes") or 30),
-                "is_pullout": bool(service.get("is_pullout", True)),
-            })
-    elif student.get("has_iep"):
-        # IEP-flagged but no StudentService rows on file -- fall back
-        # to a generic placeholder so the student still gets SOME
-        # mandated-support slot, rather than silently getting nothing.
-        # This should shrink toward zero as real service data is
-        # entered/imported; a student hitting this branch is a sign
-        # their services still need to be entered.
-        services.append({
-            "subject": "IEP Support",
-            "service_type": "SETSS",
-            "minutes": 30,
-            "is_pullout": True
-        })
-
-    # ENL is a mandated, individually-scheduled pullout service and
-    # must remain here regardless of anything done to the block above.
-    enl_minutes = int(student.get("enl_minutes_required") or 0)
-    if enl_minutes > 0:
-        services.append({
-            "subject": "ENL",
-            "service_type": "ENL",
-            "minutes": enl_minutes,
-            "is_pullout": True
-        })
-
-    return services
