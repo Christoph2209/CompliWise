@@ -312,10 +312,13 @@ def import_student_services(db, school, csv_path):
     they're trusted for compliance checks.
     """
     created = 0
+    already_present = 0
     skipped_no_student = 0
     skipped_bad_json = 0
 
-    with open(csv_path, newline="", encoding="utf-8") as f:
+    # utf-8-sig like the other importers, so an Excel BOM doesn't hide
+    # the first column name.
+    with open(csv_path, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
 
         for row in reader:
@@ -342,10 +345,27 @@ def import_student_services(db, school, csv_path):
                 skipped_bad_json += 1
                 continue
 
+            # Re-importing the same file must not duplicate services.
+            # A service type the student already has is left alone: its
+            # minutes may have been verified/edited by staff since, and
+            # the CSV only carries placeholder minutes.
+            existing_types = {
+                t for (t,) in db.query(StudentService.service_type)
+                .filter(StudentService.student_id == student.id)
+            }
+
             for svc in services:
-                service_type = canonical_service_type(svc.get("service_type"))
+                service_type = (
+                    canonical_service_type(svc.get("service_type"))
+                    if isinstance(svc, dict)
+                    else None
+                )
                 if not service_type:
                     continue
+                if service_type in existing_types:
+                    already_present += 1
+                    continue
+                existing_types.add(service_type)
 
                 frequency = svc.get("frequency")
                 sessions_per_week = _parse_sessions_per_week(frequency)
@@ -384,6 +404,7 @@ def import_student_services(db, school, csv_path):
     db.commit()
     return {
         "services_created": created,
+        "services_already_present": already_present,
         "students_not_found": skipped_no_student,
         "rows_with_bad_json": skipped_bad_json,
     }
@@ -397,7 +418,7 @@ def main():
 
         import_students(db, school)
         import_staff(db, school)
-        import_student_services(db, school)
+        import_student_services(db, school, csv_path=STUDENTS_CSV)
 
         print("CSV import complete.")
 

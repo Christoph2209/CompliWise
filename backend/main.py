@@ -12,6 +12,7 @@ import tempfile
 from pathlib import Path
 from fastapi import File, UploadFile, Request
 from import_csv_data import import_student_services, import_students, import_staff
+from import_validation import validate_staff_csv, validate_students_csv, summarize_errors
 from uuid import UUID
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -96,12 +97,54 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
     if not user_id:
         raise HTTPException(status_code=401, detail="Not logged in")
 
-    user = db.query(User).filter(User.id == UUID(user_id)).first()
-    if not user:
+    try:
+        user_uuid = UUID(user_id)
+    except ValueError:
+        request.session.clear()
+        raise HTTPException(status_code=401, detail="Session no longer valid")
+
+    user = db.query(User).filter(User.id == user_uuid).first()
+    if not user or not user.is_active:
         request.session.clear()
         raise HTTPException(status_code=401, detail="Session no longer valid")
 
     return user
+
+
+# Role groups. Every endpoint below declares which roles may call it.
+ADMIN = ("admin",)
+MANAGERS = ("admin", "principal")          # build/edit schedules, student & staff records
+ALL_STAFF = ("admin", "principal", "teacher", "aide")
+VALID_ROLES = set(ALL_STAFF)
+
+
+def require_roles(*roles: str):
+    """
+    Dependency factory: `user: User = Depends(require_roles(*MANAGERS))`
+    logs the caller in (401 if not) and checks their role (403 if not
+    allowed). Every query must ALSO filter by user.school_id -- the role
+    check alone doesn't stop one school reading another's data.
+    """
+    allowed = set(roles)
+
+    def dependency(user: User = Depends(get_current_user)) -> User:
+        if user.role not in allowed:
+            raise HTTPException(status_code=403, detail="Not allowed")
+        return user
+
+    return dependency
+
+
+def _client_ip(request: Request) -> str | None:
+    return request.client.host if request.client else None
+
+
+def _parse_uuid(value: str, what: str = "Record") -> UUID:
+    """Malformed ids are a 404, not a 500 from Postgres."""
+    try:
+        return UUID(str(value))
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"{what} not found")
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +185,8 @@ ALLOWED_STUDENT_FIELDS = {
 }
 
 class StaffCreate(BaseModel):
-    school_id: str
+    # Ignored if sent: staff are always created in the caller's school.
+    school_id: str | None = None
     first_name: str
     last_name: str
     external_staff_id: str | None = None
@@ -239,9 +283,10 @@ def _entry_time_fields(entry) -> dict:
     }
 
 
-def _latest_full_run(db: Session) -> ScheduleRun | None:
+def _latest_full_run(db: Session, school_id) -> ScheduleRun | None:
     return (
         db.query(ScheduleRun)
+        .filter(ScheduleRun.school_id == school_id)
         .filter(ScheduleRun.name == FULL_SCHEDULE_RUN_NAME)
         .order_by(ScheduleRun.created_at.desc())
         .first()
@@ -384,7 +429,7 @@ def get_setup_status(db: Session = Depends(get_db)):
 
 
 @app.post("/setup/initialize")
-def initialize_setup(payload: SetupInitializeRequest, db: Session = Depends(get_db)):
+def initialize_setup(payload: SetupInitializeRequest, request: Request, db: Session = Depends(get_db)):
     try:
         setup_module.run_migrations()
     except setup_module.SetupError as error:
@@ -405,6 +450,20 @@ def initialize_setup(payload: SetupInitializeRequest, db: Session = Depends(get_
     except setup_module.SetupError as error:
         raise HTTPException(status_code=400, detail=str(error))
 
+    # Log the new admin straight in, so the wizard's next step (CSV
+    # import) is an authenticated admin request like any other.
+    request.session.clear()
+    request.session["user_id"] = str(admin.id)
+    write_audit_log(
+        db,
+        action="Setup Completed",
+        school_id=school.id,
+        user_id=admin.id,
+        entity_type="School",
+        entity_id=school.id,
+        ip_address=_client_ip(request),
+    )
+
     return {
         "school_id": str(school.id),
         "school_name": school.name,
@@ -413,37 +472,136 @@ def initialize_setup(payload: SetupInitializeRequest, db: Session = Depends(get_
     }
 
 
-@app.post("/setup/import-csv")
-def setup_import_csv(
+# ---------------------------------------------------------------------------
+# CSV import: preview (validate only) and commit
+# ---------------------------------------------------------------------------
+
+def _save_upload(upload: UploadFile | None, folder: str, name: str) -> Path | None:
+    if upload is None:
+        return None
+    path = Path(folder) / name
+    with path.open("wb") as f:
+        shutil.copyfileobj(upload.file, f)
+    return path
+
+
+def _validate_uploads(db: Session, school_id, students_path, staff_path):
+    reports = []
+    if students_path:
+        reports.append(validate_students_csv(db, school_id, students_path))
+    if staff_path:
+        reports.append(validate_staff_csv(db, school_id, staff_path))
+    return reports
+
+
+def _commit_import(db: Session, user: User, students_path, staff_path, request: Request) -> dict:
+    school = db.query(School).filter(School.id == user.school_id).first()
+    if not school:
+        raise HTTPException(status_code=400, detail="Your account isn't linked to a school.")
+
+    result = {"students_imported": 0, "staff_imported": 0, "services_imported": 0}
+    # Staff first, so service providers exist before students reference them.
+    if staff_path:
+        result["staff_imported"] = import_staff(db, school, csv_path=staff_path)
+    if students_path:
+        result["students_imported"] = import_students(db, school, csv_path=students_path)
+        services = import_student_services(db, school, csv_path=students_path)
+        result["services_imported"] = services["services_created"]
+        result["services_already_present"] = services["services_already_present"]
+
+    write_audit_log(
+        db,
+        action="CSV Import",
+        school_id=school.id,
+        user_id=user.id,
+        entity_type="Import",
+        after=result,
+        ip_address=_client_ip(request),
+    )
+    return result
+
+
+@app.post("/import/preview")
+def preview_import(
     students_file: UploadFile | None = File(None),
     staff_file: UploadFile | None = File(None),
+    user: User = Depends(require_roles(*ADMIN)),
     db: Session = Depends(get_db),
 ):
-    if not setup_module.admin_exists(db):
-        raise HTTPException(status_code=403, detail="Complete admin setup before importing data.")
-
-    school = db.query(School).first()
-    if not school:
-        raise HTTPException(status_code=400, detail="No school found — run /setup/initialize first.")
-
-    result = {"students_imported": 0, "staff_imported": 0}
+    """Validates the files row by row and reports new/updated counts.
+    Writes nothing."""
+    if students_file is None and staff_file is None:
+        raise HTTPException(status_code=400, detail="Upload a students file, a staff file, or both.")
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        if students_file is not None:
-            students_path = Path(tmpdir) / "students.csv"
-            with students_path.open("wb") as f:
-                shutil.copyfileobj(students_file.file, f)
-            result["students_imported"] = import_students(db, school, csv_path=students_path)
+        students_path = _save_upload(students_file, tmpdir, "students.csv")
+        staff_path = _save_upload(staff_file, tmpdir, "staff.csv")
+        reports = _validate_uploads(db, user.school_id, students_path, staff_path)
 
-            service_result = import_student_services(db, school, csv_path=students_path)
-            result["services_imported"] = service_result["services_created"]
-        if staff_file is not None:
-            staff_path = Path(tmpdir) / "staff.csv"
-            with staff_path.open("wb") as f:
-                shutil.copyfileobj(staff_file.file, f)
-            result["staff_imported"] = import_staff(db, school, csv_path=staff_path)
+    return {
+        "can_import": all(r.error_count == 0 for r in reports),
+        "files": [r.as_dict() for r in reports],
+    }
 
+
+@app.post("/import/commit")
+def commit_import(
+    request: Request,
+    students_file: UploadFile | None = File(None),
+    staff_file: UploadFile | None = File(None),
+    user: User = Depends(require_roles(*ADMIN)),
+    db: Session = Depends(get_db),
+):
+    """Re-validates (the files are re-uploaded, so the server never trusts
+    an earlier preview) and imports only if there are no errors."""
+    if students_file is None and staff_file is None:
+        raise HTTPException(status_code=400, detail="Upload a students file, a staff file, or both.")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        students_path = _save_upload(students_file, tmpdir, "students.csv")
+        staff_path = _save_upload(staff_file, tmpdir, "staff.csv")
+        reports = _validate_uploads(db, user.school_id, students_path, staff_path)
+
+        if any(r.error_count for r in reports):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": "Import refused: fix the errors and upload again.",
+                    "files": [r.as_dict() for r in reports],
+                },
+            )
+
+        result = _commit_import(db, user, students_path, staff_path, request)
+
+    result["warnings"] = sum(r.warning_count for r in reports)
     return result
+
+
+@app.post("/setup/import-csv")
+def setup_import_csv(
+    request: Request,
+    students_file: UploadFile | None = File(None),
+    staff_file: UploadFile | None = File(None),
+    user: User = Depends(require_roles(*ADMIN)),
+    db: Session = Depends(get_db),
+):
+    """
+    The setup wizard's import step. /setup/initialize logs the new admin
+    in, so this is an ordinary admin-only request -- before this change
+    it was open to anyone once setup had finished.
+    Errors come back as one string because the wizard shows `detail` as text.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        students_path = _save_upload(students_file, tmpdir, "students.csv")
+        staff_path = _save_upload(staff_file, tmpdir, "staff.csv")
+        if not students_path and not staff_path:
+            return {"students_imported": 0, "staff_imported": 0}
+
+        reports = _validate_uploads(db, user.school_id, students_path, staff_path)
+        if any(r.error_count for r in reports):
+            raise HTTPException(status_code=422, detail=summarize_errors(reports))
+
+        return _commit_import(db, user, students_path, staff_path, request)
 
 @app.get("/me")
 def get_me(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -482,6 +640,9 @@ def add_user(
     if admin.role != "admin":
         raise HTTPException(status_code=403, detail="Only admins can add users")
 
+    if payload.role not in VALID_ROLES:
+        raise HTTPException(status_code=400, detail=f"role must be one of {sorted(VALID_ROLES)}")
+
     # Prevent duplicate accounts
     existing = db.query(User).filter(User.email == payload.email).first()
     if existing:
@@ -489,7 +650,14 @@ def add_user(
 
     # If linking to a staff member, make sure it exists and isn't already claimed
     if payload.staff_id:
-        staff = db.query(StaffMember).filter(StaffMember.id == payload.staff_id).first()
+        staff = (
+            db.query(StaffMember)
+            .filter(
+                StaffMember.id == _parse_uuid(payload.staff_id, "Staff member"),
+                StaffMember.school_id == admin.school_id,
+            )
+            .first()
+        )
         if not staff:
             raise HTTPException(status_code=404, detail="Staff member not found")
 
@@ -540,10 +708,13 @@ def list_students(
     grade: int | None = None,
     iep: bool | None = None,
     mtss_tier: int | None = None,
-    user=Depends(get_current_user),
+    user: User = Depends(require_roles(*MANAGERS)),
 ):
     try:
-        students = get_students(search=search, grade=grade, iep=iep, mtss_tier=mtss_tier)
+        students = get_students(
+            search=search, grade=grade, iep=iep, mtss_tier=mtss_tier,
+            school_id=user.school_id,
+        )
         return {"students": students, "count": len(students)}
 
     except (DBConfigError, DBAPIError) as error:
@@ -551,11 +722,20 @@ def list_students(
 
 
 @app.put("/students/{student_id}")
-def update_student(student_id: str, student: StudentUpdate):
+def update_student(
+    student_id: str,
+    student: StudentUpdate,
+    request: Request,
+    user: User = Depends(require_roles(*MANAGERS)),
+):
     db = SessionLocal()
 
     try:
-        db_student = db.query(Student).filter(Student.id == student_id).first()
+        db_student = (
+            db.query(Student)
+            .filter(Student.id == _parse_uuid(student_id, "Student"), Student.school_id == user.school_id)
+            .first()
+        )
 
         if not db_student:
             raise HTTPException(status_code=404, detail="Student not found")
@@ -563,12 +743,28 @@ def update_student(student_id: str, student: StudentUpdate):
         # exclude_unset: only fields the client actually sent. Plain
         # .dict() includes every unsent field as None and would wipe
         # grade/homeroom whenever someone edits just a name.
-        for key, value in student.dict(exclude_unset=True).items():
-            if key in ALLOWED_STUDENT_FIELDS:
-                setattr(db_student, key, value)
+        changes = {
+            key: value for key, value in student.dict(exclude_unset=True).items()
+            if key in ALLOWED_STUDENT_FIELDS
+        }
+        before = _jsonable({key: getattr(db_student, key) for key in changes})
+        for key, value in changes.items():
+            setattr(db_student, key, value)
 
         db.commit()
         db.refresh(db_student)
+
+        write_audit_log(
+            db,
+            action="Update Student",
+            school_id=user.school_id,
+            user_id=user.id,
+            entity_type="Student",
+            entity_id=db_student.id,
+            before=before,
+            after=_jsonable(changes),
+            ip_address=_client_ip(request),
+        )
 
         return {"student": db_student}
 
@@ -577,15 +773,20 @@ def update_student(student_id: str, student: StudentUpdate):
 
 
 @app.get("/students/{student_id}/schedule")
-def get_student_schedule(student_id: str):
+def get_student_schedule(student_id: str, user: User = Depends(require_roles(*ALL_STAFF))):
     db = SessionLocal()
 
     try:
-        entries = (
-            db.query(ScheduleEntry)
-            .filter(ScheduleEntry.student_external_id == student_id)
-            .all()
+        query = db.query(ScheduleEntry).filter(
+            ScheduleEntry.school_id == user.school_id,
+            ScheduleEntry.student_external_id == student_id,
         )
+        entries = query.all()
+
+        # Teachers and aides only see students they actually serve.
+        if user.role not in MANAGERS:
+            if not user.staff_id or not any(e.staff_id == user.staff_id for e in entries):
+                raise HTTPException(status_code=404, detail="Student not found")
 
         return [
             {
@@ -727,17 +928,22 @@ def create_student_service(
     student_id: str,
     payload: StudentServiceCreate,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_roles(*MANAGERS)),
 ):
     db = SessionLocal()
     try:
-        student = db.query(Student).filter(Student.id == student_id).first()
+        student = (
+            db.query(Student)
+            .filter(Student.id == _parse_uuid(student_id, "Student"), Student.school_id == user.school_id)
+            .first()
+        )
         if not student:
             raise HTTPException(status_code=404, detail="Student not found")
 
         if payload.preferred_provider_id:
             provider = db.query(StaffMember).filter(
-                StaffMember.id == payload.preferred_provider_id
+                StaffMember.id == _parse_uuid(payload.preferred_provider_id, "Preferred provider"),
+                StaffMember.school_id == user.school_id,
             ).first()
             if not provider:
                 raise HTTPException(status_code=404, detail="Preferred provider not found")
@@ -788,10 +994,14 @@ def create_student_service(
 
 
 @app.get("/students/{student_id}/services")
-def list_student_services(student_id: str, user: User = Depends(get_current_user)):
+def list_student_services(student_id: str, user: User = Depends(require_roles(*MANAGERS))):
     db = SessionLocal()
     try:
-        student = db.query(Student).filter(Student.id == student_id).first()
+        student = (
+            db.query(Student)
+            .filter(Student.id == _parse_uuid(student_id, "Student"), Student.school_id == user.school_id)
+            .first()
+        )
         if not student:
             raise HTTPException(status_code=404, detail="Student not found")
 
@@ -824,7 +1034,7 @@ def suggest_times_for_service(
     student_id: str,
     service_id: str,
     top_n: int = 5,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_roles(*MANAGERS)),
 ):
     """
     "When could this happen?" -- the best open times for one session of
@@ -844,13 +1054,17 @@ def suggest_times_for_service(
     try:
         service = (
             db.query(StudentService)
-            .filter(StudentService.id == service_uuid, StudentService.student_id == student_uuid)
+            .filter(
+                StudentService.id == service_uuid,
+                StudentService.student_id == student_uuid,
+                StudentService.school_id == user.school_id,
+            )
             .first()
         )
         if not service:
             raise HTTPException(status_code=404, detail="Service not found")
 
-        run = _latest_full_run(db)
+        run = _latest_full_run(db, user.school_id)
         if not run:
             raise HTTPException(status_code=409, detail="Generate a schedule first.")
         period_config = _run_period_config(run)
@@ -859,8 +1073,8 @@ def suggest_times_for_service(
         db.close()
 
     try:
-        students = get_students()
-        staff = get_staff()
+        students = get_students(school_id=user.school_id)
+        staff = get_staff(school_id=user.school_id)
     except (DBConfigError, DBAPIError) as error:
         raise HTTPException(status_code=500, detail=str(error))
 
@@ -896,13 +1110,17 @@ def update_student_service(
     service_id: str,
     payload: StudentServiceUpdate,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_roles(*MANAGERS)),
 ):
     db = SessionLocal()
     try:
         service = (
             db.query(StudentService)
-            .filter(StudentService.id == service_id, StudentService.student_id == student_id)
+            .filter(
+                StudentService.id == _parse_uuid(service_id, "Service"),
+                StudentService.student_id == _parse_uuid(student_id, "Service"),
+                StudentService.school_id == user.school_id,
+            )
             .first()
         )
         if not service:
@@ -915,6 +1133,13 @@ def update_student_service(
 
         for field, value in update_data.items():
             if field in ALLOWED_SERVICE_FIELDS:
+                if field == "preferred_provider_id" and value:
+                    provider = db.query(StaffMember).filter(
+                        StaffMember.id == _parse_uuid(value, "Preferred provider"),
+                        StaffMember.school_id == user.school_id,
+                    ).first()
+                    if not provider:
+                        raise HTTPException(status_code=404, detail="Preferred provider not found")
                 setattr(service, field, value)
 
         db.commit()
@@ -942,13 +1167,17 @@ def delete_student_service(
     student_id: str,
     service_id: str,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_roles(*MANAGERS)),
 ):
     db = SessionLocal()
     try:
         service = (
             db.query(StudentService)
-            .filter(StudentService.id == service_id, StudentService.student_id == student_id)
+            .filter(
+                StudentService.id == _parse_uuid(service_id, "Service"),
+                StudentService.student_id == _parse_uuid(student_id, "Service"),
+                StudentService.school_id == user.school_id,
+            )
             .first()
         )
         if not service:
@@ -982,21 +1211,38 @@ def delete_student_service(
 # ---------------------------------------------------------------------------
 
 @app.get("/staff")
-def list_staff():
+def list_staff(user: User = Depends(require_roles(*ALL_STAFF))):
     try:
-        staff = get_staff()
+        staff = get_staff(school_id=user.school_id)
         return {"staff": staff, "count": len(staff)}
 
     except (DBConfigError, DBAPIError) as error:
         raise HTTPException(status_code=500, detail=str(error))
 
 @app.post("/staff")
-def create_staff(staff: StaffCreate, db: Session = Depends(get_db)):
+def create_staff(
+    staff: StaffCreate,
+    request: Request,
+    user: User = Depends(require_roles(*MANAGERS)),
+    db: Session = Depends(get_db),
+):
     try:
-        db_staff = StaffMember(**staff.dict())
+        data = staff.dict(exclude={"school_id"})
+        db_staff = StaffMember(**data, school_id=user.school_id)
         db.add(db_staff)
         db.commit()
         db.refresh(db_staff)
+
+        write_audit_log(
+            db,
+            action="Create Staff",
+            school_id=user.school_id,
+            user_id=user.id,
+            entity_type="StaffMember",
+            entity_id=db_staff.id,
+            after=_jsonable(data),
+            ip_address=_client_ip(request),
+        )
 
         return {
             "staff": {
@@ -1018,26 +1264,52 @@ def create_staff(staff: StaffCreate, db: Session = Depends(get_db)):
             }
         }
 
-    except Exception as error:
+    except Exception:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(error))
+        # Don't echo raw database errors (they can include other rows' data).
+        raise HTTPException(status_code=400, detail="Couldn't create staff member. Check the fields and try again.")
 
 @app.put("/staff/{staff_id}")
-def update_staff(staff_id: str, payload: StaffUpdate):
+def update_staff(
+    staff_id: str,
+    payload: StaffUpdate,
+    request: Request,
+    user: User = Depends(require_roles(*MANAGERS)),
+):
     db = SessionLocal()
     try:
-        staff = db.query(StaffMember).filter(StaffMember.id == staff_id).first()
+        staff = (
+            db.query(StaffMember)
+            .filter(StaffMember.id == _parse_uuid(staff_id, "Staff"), StaffMember.school_id == user.school_id)
+            .first()
+        )
         if not staff:
             raise HTTPException(status_code=404, detail="Staff not found")
 
         # exclude_unset: toggling one certification must not null out
         # grade (a known root cause of bad staff matching).
-        for field, value in payload.dict(exclude_unset=True).items():
-            if field in ALLOWED_STAFF_FIELDS:
-                setattr(staff, field, value)
+        changes = {
+            field: value for field, value in payload.dict(exclude_unset=True).items()
+            if field in ALLOWED_STAFF_FIELDS
+        }
+        before = _jsonable({field: getattr(staff, field) for field in changes})
+        for field, value in changes.items():
+            setattr(staff, field, value)
 
         db.commit()
         db.refresh(staff)
+
+        write_audit_log(
+            db,
+            action="Update Staff",
+            school_id=user.school_id,
+            user_id=user.id,
+            entity_type="StaffMember",
+            entity_id=staff.id,
+            before=before,
+            after=_jsonable(changes),
+            ip_address=_client_ip(request),
+        )
 
         return {
             "id": str(staff.id),
@@ -1086,7 +1358,10 @@ def my_schedule(user: User = Depends(get_current_user), db: Session = Depends(ge
 # ---------------------------------------------------------------------------
 
 @app.get("/schedule")
-def list_schedule_entries(run_id: str | None = None):
+def list_schedule_entries(run_id: str | None = None, user: User = Depends(require_roles(*ALL_STAFF))):
+    """Admins/principals get the whole school's entries. Teachers and aides
+    get only the entries they deliver -- the teacher dashboard used to
+    download every student's schedule and filter it in the browser."""
     db = SessionLocal()
 
     try:
@@ -1094,10 +1369,14 @@ def list_schedule_entries(run_id: str | None = None):
             db.query(ScheduleEntry, Student, StaffMember)
             .join(Student, ScheduleEntry.student_id == Student.id)
             .outerjoin(StaffMember, ScheduleEntry.staff_id == StaffMember.id)
-
+            .filter(ScheduleEntry.school_id == user.school_id)
         )
         if run_id:
-            query = query.filter(ScheduleEntry.run_id == run_id)
+            query = query.filter(ScheduleEntry.run_id == _parse_uuid(run_id, "Schedule run"))
+        if user.role not in MANAGERS:
+            if not user.staff_id:
+                return []
+            query = query.filter(ScheduleEntry.staff_id == user.staff_id)
 
         results = query.all()
 
@@ -1130,7 +1409,7 @@ def update_schedule_entry(
     entry_id: str,
     payload: dict,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_roles(*MANAGERS)),
 ):
     unknown = set(payload) - ALLOWED_SCHEDULE_ENTRY_FIELDS
     if unknown:
@@ -1141,7 +1420,11 @@ def update_schedule_entry(
 
     db = SessionLocal()
     try:
-        entry = db.query(ScheduleEntry).filter(ScheduleEntry.id == entry_id).first()
+        entry = (
+            db.query(ScheduleEntry)
+            .filter(ScheduleEntry.id == _parse_uuid(entry_id, "Entry"), ScheduleEntry.school_id == user.school_id)
+            .first()
+        )
         if not entry:
             raise HTTPException(status_code=404, detail="Not found")
 
@@ -1166,7 +1449,11 @@ def update_schedule_entry(
                     staff_uuid = UUID(str(payload["staff_id"]))
                 except ValueError:
                     raise HTTPException(status_code=400, detail="staff_id is not a valid id")
-                staff = db.query(StaffMember).filter(StaffMember.id == staff_uuid).first()
+                staff = (
+                    db.query(StaffMember)
+                    .filter(StaffMember.id == staff_uuid, StaffMember.school_id == user.school_id)
+                    .first()
+                )
                 if not staff:
                     raise HTTPException(status_code=404, detail="Staff member not found")
                 entry.staff_id = staff.id
@@ -1208,7 +1495,7 @@ def update_schedule_entry(
 def list_staff_schedule_entries(
     run_id: str | None = None,
     staff_id: str | None = None,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_roles(*ALL_STAFF)),
 ):
     """Saved teacher schedules: one row per teacher per class/session,
     including prep and lunch. Defaults to the latest full run. Teachers
@@ -1224,7 +1511,7 @@ def list_staff_schedule_entries(
             if run_id:
                 run_uuid = UUID(run_id)
             else:
-                run = _latest_full_run(db)
+                run = _latest_full_run(db, user.school_id)
                 if not run:
                     return []
                 run_uuid = run.id
@@ -1232,7 +1519,10 @@ def list_staff_schedule_entries(
         except ValueError:
             raise HTTPException(status_code=400, detail="run_id / staff_id is not a valid id")
 
-        query = db.query(StaffScheduleEntry).filter(StaffScheduleEntry.run_id == run_uuid)
+        query = db.query(StaffScheduleEntry).filter(
+            StaffScheduleEntry.run_id == run_uuid,
+            StaffScheduleEntry.school_id == user.school_id,
+        )
         if staff_uuid:
             query = query.filter(StaffScheduleEntry.staff_id == staff_uuid)
 
@@ -1263,11 +1553,11 @@ def list_staff_schedule_entries(
 
 
 @app.get("/preview-priority")
-def preview_priority():
+def preview_priority(user: User = Depends(require_roles(*MANAGERS))):
     """Calculate student scheduling priority order. Does not save schedule changes."""
     try:
-        students = get_students()
-        staff = get_staff()
+        students = get_students(school_id=user.school_id)
+        staff = get_staff(school_id=user.school_id)
         school_year = os.getenv("SCHOOL_YEAR", "2026-2027")
 
         result = schedule_iep_services_first(
@@ -1288,7 +1578,7 @@ def preview_priority():
 
 
 @app.get("/schedule/config-defaults")
-def get_schedule_config_defaults(user: User = Depends(get_current_user)):
+def get_schedule_config_defaults(user: User = Depends(require_roles(*MANAGERS))):
     """
     Prefill for the Generate Schedule modal: the master schedule and
     rules from the most recent full run, so the principal doesn't
@@ -1297,7 +1587,7 @@ def get_schedule_config_defaults(user: User = Depends(get_current_user)):
     """
     db = SessionLocal()
     try:
-        run = _latest_full_run(db)
+        run = _latest_full_run(db, user.school_id)
         payload = (run.summary_json or {}).get("period_config") if run else None
     finally:
         db.close()
@@ -1319,13 +1609,15 @@ def get_schedule_config_defaults(user: User = Depends(get_current_user)):
 
 
 @app.get("/schedule-runs")
-def list_schedule_runs(user: User = Depends(get_current_user)):
-    if user.role not in ("admin", "principal"):
-        raise HTTPException(status_code=403, detail="Not allowed")
-
+def list_schedule_runs(user: User = Depends(require_roles(*MANAGERS))):
     db = SessionLocal()
     try:
-        runs = db.query(ScheduleRun).order_by(ScheduleRun.created_at.desc()).all()
+        runs = (
+            db.query(ScheduleRun)
+            .filter(ScheduleRun.school_id == user.school_id)
+            .order_by(ScheduleRun.created_at.desc())
+            .all()
+        )
         run_ids = [r.id for r in runs]
 
         entry_counts = dict(
@@ -1364,13 +1656,14 @@ def list_schedule_runs(user: User = Depends(get_current_user)):
         db.close()
 
 @app.get("/schedule-runs/{run_id}")
-def get_schedule_run(run_id: str, user: User = Depends(get_current_user)):
-    if user.role not in ("admin", "principal"):
-        raise HTTPException(status_code=403, detail="Not allowed")
-
+def get_schedule_run(run_id: str, user: User = Depends(require_roles(*MANAGERS))):
     db = SessionLocal()
     try:
-        run = db.query(ScheduleRun).filter(ScheduleRun.id == run_id).first()
+        run = (
+            db.query(ScheduleRun)
+            .filter(ScheduleRun.id == _parse_uuid(run_id, "Schedule run"), ScheduleRun.school_id == user.school_id)
+            .first()
+        )
         if not run:
             raise HTTPException(status_code=404, detail="Schedule run not found")
 
@@ -1378,11 +1671,11 @@ def get_schedule_run(run_id: str, user: User = Depends(get_current_user)):
             db.query(ScheduleEntry, Student, StaffMember)
             .join(Student, ScheduleEntry.student_id == Student.id)
             .outerjoin(StaffMember, ScheduleEntry.staff_id == StaffMember.id)
-            .filter(ScheduleEntry.run_id == run_id)
+            .filter(ScheduleEntry.run_id == run.id)
             .all()
         )
 
-        flags = db.query(ComplianceFlag).filter(ComplianceFlag.run_id == run_id).all()
+        flags = db.query(ComplianceFlag).filter(ComplianceFlag.run_id == run.id).all()
 
         return {
             "id": str(run.id),
@@ -1439,15 +1732,20 @@ def _run_summary(result: dict, period_config: PeriodConfig, critical_flags: list
 
 
 @app.post("/save-schedule")
-def save_schedule(config: ScheduleGenerationConfig):
+def save_schedule(
+    config: ScheduleGenerationConfig,
+    request: Request,
+    user: User = Depends(require_roles(*MANAGERS)),
+):
     try:
         period_config = PeriodConfig.from_config(config)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
 
+    school_id = user.school_id
     try:
-        students = get_students()
-        staff = get_staff()
+        students = get_students(school_id=school_id)
+        staff = get_staff(school_id=school_id)
         school_year = os.getenv("SCHOOL_YEAR", "2026-2027")
 
         result = schedule_iep_services_first(
@@ -1469,6 +1767,7 @@ def save_schedule(config: ScheduleGenerationConfig):
             school_year=school_year,
             name=FULL_SCHEDULE_RUN_NAME,
             summary=_run_summary(result, period_config, critical_flags),
+            school_id=school_id,
         )
 
         create_schedule_entries(schedule_entries, run_id=schedule_run_id)
@@ -1476,6 +1775,20 @@ def save_schedule(config: ScheduleGenerationConfig):
         create_compliance_flags(compliance_flags, run_id=schedule_run_id)
         create_flex_groups(flex_groups, run_id=schedule_run_id)
         create_flex_group_students(flex_group_students, run_id=schedule_run_id)
+
+        db = SessionLocal()
+        try:
+            write_audit_log(
+                db,
+                action="Save Schedule",
+                school_id=school_id,
+                user_id=user.id,
+                entity_type="ScheduleRun",
+                entity_id=UUID(schedule_run_id),
+                ip_address=_client_ip(request),
+            )
+        finally:
+            db.close()
 
         return {
             "success": True,
@@ -1496,14 +1809,32 @@ def save_schedule(config: ScheduleGenerationConfig):
 
 
 @app.post("/reset-generated-schedules")
-def reset_generated_schedules():
-    """Delete generated schedule output records. Student and staff records remain unchanged."""
+def reset_generated_schedules(request: Request, user: User = Depends(require_roles(*ADMIN))):
+    """Delete THIS SCHOOL's generated schedule output. Student and staff
+    records remain unchanged. Admin-only and audited: it's destructive."""
+    school_id = user.school_id
     try:
-        deleted_schedule_entries = delete_entity_many("ScheduleEntry", {})
-        deleted_schedule_runs = delete_entity_many("ScheduleRun", {})
-        deleted_compliance_flags = delete_entity_many("ComplianceFlag", {})
-        deleted_flex_groups = delete_entity_many("FlexGroup", {})
-        deleted_flex_group_students = delete_entity_many("FlexGroupStudent", {})
+        deleted_schedule_entries = delete_entity_many("ScheduleEntry", {}, school_id=school_id)
+        deleted_compliance_flags = delete_entity_many("ComplianceFlag", {}, school_id=school_id)
+        # Deleting flex groups cascades to their flex_group_students rows.
+        deleted_flex_groups = delete_entity_many("FlexGroup", {}, school_id=school_id)
+        deleted_flex_group_students = {"deleted": "cascaded with flex groups"}
+        # Runs last; staff_schedule_entries cascade from them.
+        deleted_schedule_runs = delete_entity_many("ScheduleRun", {}, school_id=school_id)
+
+        db = SessionLocal()
+        try:
+            write_audit_log(
+                db,
+                action="Reset Generated Schedules",
+                school_id=school_id,
+                user_id=user.id,
+                entity_type="ScheduleRun",
+                after={"schedule_runs": deleted_schedule_runs.get("deleted")},
+                ip_address=_client_ip(request),
+            )
+        finally:
+            db.close()
 
         return {
             "success": True,
@@ -1547,8 +1878,8 @@ def _run_schedule_job(job_id: str, config: ScheduleGenerationConfig, user_id=Non
               f"max_pullouts={period_config.max_pullouts_per_day} "
               f"specials={period_config.specials_sessions_per_week}")
         
-        students = get_students()
-        staff = get_staff()
+        students = get_students(school_id=school_id)
+        staff = get_staff(school_id=school_id)
         school_year = os.getenv("SCHOOL_YEAR", "2026-2027")
 
         result = schedule_iep_services_first(
@@ -1570,9 +1901,10 @@ def _run_schedule_job(job_id: str, config: ScheduleGenerationConfig, user_id=Non
             school_year=school_year,
             name=FULL_SCHEDULE_RUN_NAME,
             summary=_run_summary(result, period_config, critical_flags),
+            school_id=school_id,
         )
 
-        progress(6, "Saving schedule to database")
+        progress(6, "Saving schedule to database")  # rows inherit the run's school
         create_schedule_entries(schedule_entries, run_id=schedule_run_id)
         create_staff_schedule_entries(staff_schedule_entries, run_id=schedule_run_id)
         create_compliance_flags(compliance_flags, run_id=schedule_run_id)
@@ -1623,12 +1955,13 @@ def _run_schedule_job(job_id: str, config: ScheduleGenerationConfig, user_id=Non
 def start_schedule_generation(
     config: ScheduleGenerationConfig,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_roles(*MANAGERS)),
 ):
     job_id = str(uuid.uuid4())
     SCHEDULE_JOBS[job_id] = {
         "status": "queued", "current_stage": -1, "stage_name": None,
         "percent": 0, "result": None, "error": None,
+        "_school_id": str(user.school_id),  # never returned to clients
     }
 
     db = SessionLocal()
@@ -1656,21 +1989,25 @@ def start_schedule_generation(
 
 
 @app.get("/schedule/generate/status/{job_id}")
-def get_schedule_generation_status(job_id: str, user: User = Depends(get_current_user)):
+def get_schedule_generation_status(job_id: str, user: User = Depends(require_roles(*MANAGERS))):
     job = SCHEDULE_JOBS.get(job_id)
-    if not job:
+    if not job or job.get("_school_id") != str(user.school_id):
         raise HTTPException(status_code=404, detail="Job not found")
-    return job
+    return {k: v for k, v in job.items() if not k.startswith("_")}
 # ---------------------------------------------------------------------------
 # Compliance flags
 # ---------------------------------------------------------------------------
 
 @app.get("/compliance-flags")
-def list_compliance_flags():
+def list_compliance_flags(user: User = Depends(require_roles(*MANAGERS))):
     db = SessionLocal()
 
     try:
-        flags = db.query(ComplianceFlag).filter(ComplianceFlag.status == "open").all()
+        flags = (
+            db.query(ComplianceFlag)
+            .filter(ComplianceFlag.school_id == user.school_id, ComplianceFlag.status == "open")
+            .all()
+        )
 
         # get student names in one go
         student_ids = [f.student_id for f in flags if f.student_id]
@@ -1714,7 +2051,7 @@ def list_compliance_flags():
         db.close()
 
 @app.post("/run-compliance-check")
-def run_compliance_check(user: User = Depends(get_current_user)):
+def run_compliance_check(user: User = Depends(require_roles(*MANAGERS))):
     """
     Re-runs every compliance check against the LATEST generated schedule
     (only that run's entries, judged by the master schedule that run was
@@ -1723,13 +2060,13 @@ def run_compliance_check(user: User = Depends(get_current_user)):
     Does not touch schedule_entries -- only reads them.
     """
     try:
-        students = get_students()
-        staff = get_staff()
+        students = get_students(school_id=user.school_id)
+        staff = get_staff(school_id=user.school_id)
         students_by_id = {s["id"]: s for s in students if s.get("id")}
 
         db = SessionLocal()
         try:
-            run = _latest_full_run(db)
+            run = _latest_full_run(db, user.school_id)
             if not run:
                 raise HTTPException(status_code=409, detail="No generated schedule to check yet.")
             period_config = _run_period_config(run)
@@ -1756,6 +2093,7 @@ def run_compliance_check(user: User = Depends(get_current_user)):
         schedule_run_id = create_schedule_run(
             school_year=school_year,
             name="Compliance Check",
+            school_id=user.school_id,
             summary={
                 "compliance_check_passed": critical_count == 0,
                 "open_critical_flags": critical_count,
@@ -1786,11 +2124,15 @@ def run_compliance_check(user: User = Depends(get_current_user)):
 def resolve_compliance_flag(
     flag_id: UUID,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_roles(*MANAGERS)),
 ):
     db = SessionLocal()
     try:
-        flag = db.query(ComplianceFlag).filter(ComplianceFlag.id == flag_id).first()
+        flag = (
+            db.query(ComplianceFlag)
+            .filter(ComplianceFlag.id == flag_id, ComplianceFlag.school_id == user.school_id)
+            .first()
+        )
         if not flag:
             raise HTTPException(status_code=404, detail="Compliance flag not found")
 
@@ -1824,15 +2166,23 @@ def resolve_compliance_flag(
 # ---------------------------------------------------------------------------
 
 @app.get("/flex_groups")
-def list_flex_groups():
+def list_flex_groups(user: User = Depends(require_roles(*ALL_STAFF))):
+    """Teachers and aides see only the FLEX groups they run."""
     db = SessionLocal()
 
     try:
-        rows = (
+        query = (
             db.query(FlexGroup, Student)
             .join(FlexGroupStudent, FlexGroupStudent.flex_group_id == FlexGroup.id)
             .join(Student, Student.id == FlexGroupStudent.student_id)
-            .all()
+            .filter(FlexGroup.school_id == user.school_id)
+        )
+        if user.role not in MANAGERS:
+            if not user.staff_id:
+                return []
+            query = query.filter(FlexGroup.staff_id == user.staff_id)
+        rows = (
+            query
         )
 
         return [
@@ -1875,7 +2225,11 @@ def list_audit_logs(
 
     db = SessionLocal()
     try:
-        query = db.query(AuditLog, User).outerjoin(User, User.id == AuditLog.user_id)
+        query = (
+            db.query(AuditLog, User)
+            .outerjoin(User, User.id == AuditLog.user_id)
+            .filter(AuditLog.school_id == user.school_id)
+        )
 
         if action:
             query = query.filter(AuditLog.action == action)
