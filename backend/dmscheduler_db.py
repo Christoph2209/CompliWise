@@ -1,31 +1,18 @@
 """
 dmscheduler_db.py
 
-Database setup for CompliWise.
+SQLAlchemy models and the database session for CompliWise.
 
-Creates tables for:
-- Student
-- StaffMember
-- StudentService
-- ScheduleRun
-- ScheduleEntry
-- StaffScheduleEntry
-- ComplianceFlag
-- FlexGroup
-- FlexGroupStudent
-- LegalRule
-- ApprovalAction
-- AuditLog
-- User
+Every other backend module imports its tables and `SessionLocal` from here.
+The schema itself is created and changed by Alembic migrations
+(backend/alembic/versions); after changing a model, generate a migration
+with `alembic revision --autogenerate -m "..."` and run `alembic upgrade head`.
 
-Install:
-    pip install sqlalchemy psycopg2-binary python-dotenv
+Almost every table carries a school_id, and the API filters every query by
+the logged-in user's school, so one database can hold several schools.
 
-.env example:
-    DATABASE_URL=postgresql+psycopg2://username:password@localhost:5432/dmscheduler
-
-Run:
-    python dmscheduler_db.py
+Configuration comes from the environment (or a .env file):
+    DATABASE_URL=postgresql+psycopg2://username:password@localhost:5432/compliwise
 """
 
 import os
@@ -62,14 +49,17 @@ SessionLocal = sessionmaker(
 )
 
 class Base(DeclarativeBase):
-    pass
+    """Base class for all CompliWise models."""
 
 
 def uuid_pk():
+    """Primary-key column shared by every table: a random UUID."""
     return mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
 
 class School(Base):
+    """A school. Top-level owner of every other record."""
+
     __tablename__ = "schools"
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -80,6 +70,15 @@ class School(Base):
 
 
 class Student(Base):
+    """
+    A student on the school's roster.
+
+    external_student_id is the school's own student number from the CSV
+    export; imports use it to update existing students instead of adding
+    duplicates. The service requirements that drive scheduling live in
+    StudentService (`services`).
+    """
+
     __tablename__ = "students"
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -102,7 +101,6 @@ class Student(Base):
 
     services = relationship("StudentService", back_populates="student")
 
-    
     __table_args__ = (
         Index("idx_students_school_grade", "school_id", "grade"),
         Index("idx_students_external_id", "school_id", "external_student_id"),
@@ -110,6 +108,15 @@ class Student(Base):
 
 
 class StaffMember(Base):
+    """
+    A teacher, provider or aide who can be scheduled.
+
+    The is_certified_* / can_deliver_setss flags decide which services the
+    scheduler may assign them (can_deliver_setss covers Resource Room; the
+    column keeps its old SETSS name). A staff member may optionally be
+    linked to a login via User.staff_id.
+    """
+
     __tablename__ = "staff_members"
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -138,19 +145,18 @@ class StaffMember(Base):
         back_populates="staff_member",
         uselist=False,
     )
-    
+
     __table_args__ = (
         Index("idx_staff_school_title", "school_id", "title"),
         Index("idx_staff_school_grade", "school_id", "grade"),
     )
-    
-    
 
 
 class StudentService(Base):
     """
-    Normalized IEP / ESL / ENL / MTSS / related service requirements.
-    This is better than keeping services only inside Student JSON.
+    One service a student is entitled to (IEP, ENL, MTSS or a related
+    service such as Speech or OT), with the minutes per week the schedule
+    must deliver. One row per student per service type.
     """
 
     __tablename__ = "student_services"
@@ -242,14 +248,9 @@ class ScheduleEntry(Base):
     student_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("students.id"), nullable=False)
     staff_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("staff_members.id"))
 
-    staff_member = relationship(
-        "StaffMember"
-    )
+    staff_member = relationship("StaffMember")
+    student = relationship("Student")
 
-    student = relationship(
-        "Student"
-    )
-    
     # Helpful denormalized display/search fields
     student_external_id: Mapped[Optional[str]] = mapped_column(String(100))
     student_name: Mapped[Optional[str]] = mapped_column(String(255))
@@ -278,11 +279,10 @@ class ScheduleEntry(Base):
     status: Mapped[str] = mapped_column(String(50), default="draft")
     source: Mapped[str] = mapped_column(String(50), default="scheduler")
 
-
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     schedule_run = relationship("ScheduleRun", back_populates="entries")
-    
+
     __table_args__ = (
         UniqueConstraint(
             "run_id",
@@ -351,6 +351,12 @@ class StaffScheduleEntry(Base):
 
 
 class ComplianceFlag(Base):
+    """
+    A problem found by the compliance checks (compliance.py) in one
+    schedule run, e.g. a student short on IEP minutes. Staff resolve flags
+    from the Compliance page, which sets status to "resolved".
+    """
+
     __tablename__ = "compliance_flags"
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -377,12 +383,16 @@ class ComplianceFlag(Base):
 
     status: Mapped[str] = mapped_column(String(50), default="open")
 
-
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
 class FlexGroup(Base):
+    """
+    A flex / WIN intervention group built by a schedule run: a set of
+    students (FlexGroupStudent) meeting with one staff member at one time.
+    """
+
     __tablename__ = "flex_groups"
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -408,7 +418,6 @@ class FlexGroup(Base):
 
     max_group_size: Mapped[int] = mapped_column(Integer, default=10)
     status: Mapped[str] = mapped_column(String(50), default="active")
-    
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -416,6 +425,8 @@ class FlexGroup(Base):
 
 
 class FlexGroupStudent(Base):
+    """Membership row linking a student to a FlexGroup."""
+
     __tablename__ = "flex_group_students"
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -437,6 +448,11 @@ class FlexGroupStudent(Base):
 
 
 class LegalRule(Base):
+    """
+    A configurable compliance rule. Not read by the application yet; the
+    rules currently live in code in compliance.py.
+    """
+
     __tablename__ = "legal_rules"
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -455,6 +471,11 @@ class LegalRule(Base):
 
 
 class ApprovalAction(Base):
+    """
+    A sign-off step on a schedule run (approve, reject, ...). Not written
+    by the application yet; publish events are recorded in AuditLog.
+    """
+
     __tablename__ = "approval_actions"
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -472,6 +493,12 @@ class ApprovalAction(Base):
 
 
 class User(Base):
+    """
+    A login account. `role` is one of admin, principal, teacher or aide
+    (see the role groups in main.py). A teacher account can be linked to
+    its StaffMember row so it can see its own schedule.
+    """
+
     __tablename__ = "users"
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -519,7 +546,14 @@ class User(Base):
         DateTime,
         default=datetime.utcnow,
     )
+
+
 class AuditLog(Base):
+    """
+    Who changed what and when. before_json / after_json hold snapshots of
+    the record so changes can be reviewed on the Audit Log page.
+    """
+
     __tablename__ = "audit_logs"
 
     id: Mapped[uuid.UUID] = uuid_pk()

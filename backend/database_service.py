@@ -1,4 +1,18 @@
-# database_service.py
+"""
+database_service.py
+
+Reads and writes for the scheduling pipeline, kept out of main.py.
+
+The read helpers (get_students, get_staff) turn ORM rows into the plain
+dicts the scheduler works with. The create_* helpers do the reverse: they
+take the scheduler's output for one run and save it as ScheduleEntry,
+StaffScheduleEntry, ComplianceFlag and FlexGroup rows. The scheduler
+refers to students by their external ID and to teachers by name, so the
+save step maps those back to database rows (see _build_*_index).
+
+Every function opens and closes its own session, and every write is
+scoped to one school: either the school that owns run_id, or school_id.
+"""
 
 import logging
 import uuid
@@ -16,36 +30,38 @@ from dmscheduler_db import (
     ComplianceFlag,
     FlexGroup,
     FlexGroupStudent,
-    User,
 )
 
 logger = logging.getLogger(__name__)
 
 
-class DBConfigError(RuntimeError):
-    pass
-
-
 class DBAPIError(RuntimeError):
-    pass
+    """A save/load failed for a reason the API should report (bad run, wrong school)."""
 
 
-def get_default_school(db):
-    school = db.query(School).first()
+def _resolve_school(db, school_id=None, run_id=None):
+    """
+    Which school a write belongs to. Preference order:
+      1. the school that owns run_id (so a run's rows can never be
+         written under a different school),
+      2. an explicit school_id.
+    Raises DBAPIError when neither is given, rather than guessing a school.
+    """
+    if run_id is not None:
+        run = db.query(ScheduleRun).filter(ScheduleRun.id == uuid.UUID(str(run_id))).first()
+        if not run:
+            raise DBAPIError(f"Schedule run {run_id} not found")
+        if school_id is not None and str(run.school_id) != str(school_id):
+            raise DBAPIError("Schedule run belongs to a different school")
+        return db.query(School).filter(School.id == run.school_id).first()
 
-    if not school:
-        school = School(
-            id=uuid.uuid4(),
-            name="Demo School",
-            district_name="Demo District",
-        )
-        db.add(school)
-        db.commit()
-        db.refresh(school)
+    if school_id is not None:
+        school = db.query(School).filter(School.id == uuid.UUID(str(school_id))).first()
+        if not school:
+            raise DBAPIError(f"School {school_id} not found")
+        return school
 
-    return school
-
-
+    raise DBAPIError("A school_id or run_id is required")
 
 
 def get_students(
@@ -53,13 +69,24 @@ def get_students(
     search: str | None = None,
     grade: int | None = None,
     iep: bool | None = None,
-    mtss_tier: int | None = None
+    mtss_tier: int | None = None,
+    school_id=None,
 ) -> List[Dict[str, Any]]:
+    """
+    Students as scheduler-ready dicts, each with its `services` list.
+
+    Optional filters: name search, grade, IEP status and MTSS tier.
+    school_id should always be passed; None returns every school's
+    students. active_only is accepted for API compatibility but ignored
+    (there is no inactive status yet).
+    """
 
     db = SessionLocal()
 
     try:
         query = db.query(Student)
+        if school_id is not None:
+            query = query.filter(Student.school_id == uuid.UUID(str(school_id)))
 
         if search:
             query = query.filter(
@@ -119,11 +146,16 @@ def get_students(
     finally:
         db.close()
 
-def get_staff(active_only: bool = False) -> List[Dict[str, Any]]:
+
+def get_staff(active_only: bool = False, school_id=None) -> List[Dict[str, Any]]:
+    """Staff as scheduler-ready dicts. school_id should always be passed (see get_students)."""
     db = SessionLocal()
 
     try:
-        staff_members = db.query(StaffMember).all()
+        query = db.query(StaffMember)
+        if school_id is not None:
+            query = query.filter(StaffMember.school_id == uuid.UUID(str(school_id)))
+        staff_members = query.all()
 
         return [
             {
@@ -153,11 +185,13 @@ def create_schedule_run(
     school_year: str = "2026-2027",
     name: str = "Generated Schedule",
     summary: Dict[str, Any] | None = None,
+    school_id=None,
 ) -> str:
+    """Create an empty draft ScheduleRun for the school and return its id."""
     db = SessionLocal()
 
     try:
-        school = get_default_school(db)
+        school = _resolve_school(db, school_id=school_id)
 
         run = ScheduleRun(
             id=uuid.uuid4(),
@@ -178,41 +212,33 @@ def create_schedule_run(
     finally:
         db.close()
 
-def _build_student_index(db) -> Dict[str, "Student"]:
-    """Maps both external_student_id and str(UUID) to Student rows,
-    so a single dict lookup replicates _find_student_by_scheduler_id's
-    external-id-first, UUID-fallback matching without a query per call."""
+
+def _build_student_index(db, school_id=None) -> Dict[str, "Student"]:
+    """Maps both external_student_id and str(UUID) to Student rows, so the
+    scheduler's student ids (external id when there is one, else the UUID)
+    resolve with one dict lookup instead of a query per row."""
     index: Dict[str, Student] = {}
-    for student in db.query(Student).all():
+    query = db.query(Student)
+    if school_id is not None:
+        query = query.filter(Student.school_id == school_id)
+    for student in query.all():
         if student.external_student_id:
             index[student.external_student_id] = student
         index[str(student.id)] = student
     return index
 
 
-def _build_staff_index(db) -> Dict[str, "StaffMember"]:
-    """Maps the exact 'First Last'.strip() name to StaffMember, matching
-    _find_staff_by_name's matching logic without a full-table scan per call."""
+def _build_staff_index(db, school_id=None) -> Dict[str, "StaffMember"]:
+    """Maps 'First Last' to StaffMember. The scheduler identifies teachers by
+    this display name, so this is how its output is linked back to staff rows."""
     index: Dict[str, StaffMember] = {}
-    for staff in db.query(StaffMember).all():
+    query = db.query(StaffMember)
+    if school_id is not None:
+        query = query.filter(StaffMember.school_id == school_id)
+    for staff in query.all():
         full_name = f"{staff.first_name} {staff.last_name}".strip()
         index[full_name] = staff
     return index
-
-def _find_student_by_scheduler_id(db, student_id: str):
-    student = db.query(Student).filter(
-        Student.external_student_id == student_id
-    ).first()
-
-    if student:
-        return student
-
-    try:
-        return db.query(Student).filter(
-            Student.id == uuid.UUID(student_id)
-        ).first()
-    except Exception:
-        return None
 
 
 def _optional_int(value):
@@ -223,12 +249,18 @@ def create_flex_group_students(
     flex_group_students: List[Dict[str, Any]],
     run_id: str,
 ) -> Dict[str, Any]:
+    """
+    Save the run's flex group memberships. Must run after create_flex_groups,
+    since each row is matched to a saved group by (name, day, start minute).
+    Rows whose student or group can't be found are skipped and logged.
+    """
     if not flex_group_students:
         return {"saved_count": 0, "run_id": run_id}
 
     db = SessionLocal()
     try:
         run_uuid = uuid.UUID(run_id)
+        school = _resolve_school(db, run_id=run_id)
 
         flex_groups_in_run = (
             db.query(FlexGroup)
@@ -241,7 +273,7 @@ def create_flex_group_students(
             for fg in flex_groups_in_run
         }
 
-        student_index = _build_student_index(db)
+        student_index = _build_student_index(db, school.id)
 
         rows = []
         seen = set()  # guard against duplicates within this batch
@@ -284,29 +316,37 @@ def create_flex_group_students(
     finally:
         db.close()
 
+
 def create_schedule_entries(
     entries: List[Dict[str, Any]],
     run_id: str | None = None,
+    school_id=None,
 ) -> Any:
+    """
+    Save the scheduler's per-student entries for a run (creating a run if
+    run_id is None). Entries whose student can't be matched are skipped and
+    logged; an unknown teacher name is kept with staff_id left empty.
+    """
     if not entries:
         return []
 
     db = SessionLocal()
 
     try:
-        school = get_default_school(db)
-
         if run_id is None:
             run_id = create_schedule_run(
                 school_year="2026-2027",
                 name="Generated Schedule",
                 summary={"schedule_entries_created": len(entries)},
+                school_id=school_id,
             )
+
+        school = _resolve_school(db, school_id=school_id, run_id=run_id)
 
         run_uuid = uuid.UUID(run_id)
 
-        student_index = _build_student_index(db)
-        staff_index = _build_staff_index(db)
+        student_index = _build_student_index(db, school.id)
+        staff_index = _build_staff_index(db, school.id)
 
         rows = []
         unmatched_students = set()
@@ -388,9 +428,9 @@ def create_staff_schedule_entries(
     db = SessionLocal()
 
     try:
-        school = get_default_school(db)
+        school = _resolve_school(db, run_id=run_id)
         run_uuid = uuid.UUID(run_id)
-        staff_index = _build_staff_index(db)
+        staff_index = _build_staff_index(db, school.id)
 
         rows = []
         unmatched_staff = set()
@@ -453,22 +493,25 @@ def create_staff_schedule_entries(
 def create_compliance_flags(
     flags: List[Dict[str, Any]],
     run_id: str | None = None,
+    school_id=None,
 ) -> Any:
+    """Save the compliance flags for a run (creating a run if run_id is None)."""
     if not flags:
         return []
 
     db = SessionLocal()
 
     try:
-        school = get_default_school(db)
-        student_index = _build_student_index(db)
-
         if run_id is None:
             run_id = create_schedule_run(
                 school_year="2026-2027",
                 name="Generated Schedule Flags",
                 summary={"compliance_flags_created": len(flags)},
+                school_id=school_id,
             )
+
+        school = _resolve_school(db, school_id=school_id, run_id=run_id)
+        student_index = _build_student_index(db, school.id)
 
         run_uuid = uuid.UUID(run_id)
 
@@ -513,22 +556,25 @@ def create_compliance_flags(
 def create_flex_groups(
     groups: List[Dict[str, Any]],
     run_id: str | None = None,
+    school_id=None,
 ) -> Any:
+    """Save the flex groups for a run (creating a run if run_id is None)."""
     if not groups:
         return []
 
     db = SessionLocal()
 
     try:
-        school = get_default_school(db)
-        staff_index = _build_staff_index(db)
-
         if run_id is None:
             run_id = create_schedule_run(
                 school_year="2026-2027",
                 name="Generated Flex Groups",
                 summary={"flex_groups_created": len(groups)},
+                school_id=school_id,
             )
+
+        school = _resolve_school(db, school_id=school_id, run_id=run_id)
+        staff_index = _build_staff_index(db, school.id)
 
         run_uuid = uuid.UUID(run_id)
 
@@ -574,94 +620,12 @@ def create_flex_groups(
         db.close()
 
 
-def get_schedule_entries() -> List[Dict[str, Any]]:
-    db = SessionLocal()
-
-    try:
-        entries = db.query(ScheduleEntry).all()
-
-        return [
-            {
-                "id": str(entry.id),
-                "run_id": str(entry.run_id),
-                "student_id": entry.student_external_id or str(entry.student_id),
-                "student_name": entry.student_name,
-                "grade": entry.grade,
-                "day_of_week": entry.day_of_week,
-                "period": entry.period,
-                "period_label": entry.period_label,
-                "start_minute": entry.start_minute,
-                "end_minute": entry.end_minute,
-                "delivery": entry.delivery,
-                "block_subject": entry.block_subject,
-                "subject": entry.subject,
-                "teacher": entry.teacher_name,
-                "room": entry.room,
-                "service_type": entry.service_type,
-                "is_pullout": entry.is_pullout,
-                "is_flex_period": entry.is_flex_period,
-                "status": entry.status,
-            }
-            for entry in entries
-        ]
-
-    finally:
-        db.close()
-
-
-def get_flex_groups(active_only: bool = True) -> List[Dict[str, Any]]:
-    db = SessionLocal()
-
-    try:
-        query = db.query(FlexGroup)
-
-        if active_only:
-            query = query.filter(FlexGroup.status == "active")
-
-        groups = query.all()
-
-        return [
-            {
-                "id": str(group.id),
-                "run_id": str(group.run_id),
-                "name": group.name,
-                "tier": group.tier,
-                "focus_area": group.focus_area,
-                "teacher": group.teacher_name,
-                "day_of_week": group.day_of_week,
-                "period": group.period,
-                "period_label": group.period_label,
-                "start_minute": group.start_minute,
-                "end_minute": group.end_minute,
-                "max_group_size": group.max_group_size,
-                "status": group.status,
-            }
-            for group in groups
-        ]
-
-    finally:
-        db.close()
-
-
-def create_schedule_proposal(payload: Dict[str, Any]) -> Dict[str, Any]:
+def delete_entity_many(entity_name: str, query: dict, school_id=None):
     """
-    Kept only so old app.py imports do not break.
-    Long term, replace ScheduleProposal with ScheduleRun.
+    Delete every row of entity_name ("ScheduleEntry", "ComplianceFlag",
+    "FlexGroup" or "ScheduleRun") belonging to school_id. `query` is
+    unused and kept for the existing call sites. school_id is required.
     """
-    run_id = create_schedule_run(
-        school_year=payload.get("school_year", "2026-2027"),
-        name=payload.get("student_name", "Generated Schedule"),
-        summary=payload,
-    )
-
-    return {
-        "id": run_id,
-        "status": "draft",
-        "message": "Stored as ScheduleRun instead of Base44 ScheduleProposal.",
-    }
-
-
-def delete_entity_many(entity_name: str, query: dict):
     db = SessionLocal()
 
     try:
@@ -680,7 +644,10 @@ def delete_entity_many(entity_name: str, query: dict):
                 "message": f"No local delete mapping for {entity_name}",
             }
 
-        deleted = db.query(model).delete()
+        if school_id is None:
+            raise DBAPIError("delete_entity_many requires school_id")
+        q = db.query(model).filter(model.school_id == uuid.UUID(str(school_id)))
+        deleted = q.delete(synchronize_session=False)
         db.commit()
 
         return {

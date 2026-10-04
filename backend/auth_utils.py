@@ -17,8 +17,10 @@ pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
 
 def hash_password(password: str) -> str:
+    """Return an Argon2 hash of `password` for storing in users.password_hash."""
     return pwd_context.hash(password)
 
 
 def verify_password(plain: str, hashed: str) -> bool:
+    """Check a login attempt against a stored hash."""
     return pwd_context.verify(plain, hashed)

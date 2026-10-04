@@ -78,6 +78,7 @@ MAX_SAME_SERVICE_PER_DAY_OVERRIDES = {
 
 
 def max_same_service_per_day(service_type: str) -> int:
+    """How many sessions of one service a student may have on one day."""
     return MAX_SAME_SERVICE_PER_DAY_OVERRIDES.get(
         service_type, MAX_SAME_SERVICE_PER_DAY
     )
@@ -96,6 +97,7 @@ SERVICE_TYPE_ALIASES = {
 
 
 def canonical_service_type(service_type: Optional[str]) -> Optional[str]:
+    """Current name for a service type ("SETSS" -> "Resource Room"); others pass through."""
     if not service_type:
         return service_type
     return SERVICE_TYPE_ALIASES.get(str(service_type).strip().lower(), service_type)
@@ -114,6 +116,7 @@ DEFAULT_SESSION_LENGTH_MINUTES = 45
 
 
 def session_length_for_service(service_type: str) -> int:
+    """Minutes in one session of this service (45 if not listed)."""
     return SERVICE_SESSION_LENGTH_MINUTES.get(
         service_type, DEFAULT_SESSION_LENGTH_MINUTES
     )
@@ -340,6 +343,7 @@ def minute_to_hhmm(minute: int) -> str:
 
 
 def format_range(start: int, end: int) -> str:
+    """(500, 560) -> "8:20 AM-9:20 AM"."""
     return f"{format_minute(start)}-{format_minute(end)}"
 
 
@@ -378,6 +382,8 @@ def normalize_grade(raw: Any) -> str:
 
 @dataclass(frozen=True)
 class Block:
+    """One block of a grade's master schedule, e.g. 2nd-grade Math 8:20-9:20 on A-E days."""
+
     grade: str
     subject: str
     start: int
@@ -577,6 +583,7 @@ class PeriodConfig:
         return format_minute(start_minute)
 
     def to_dict(self) -> Dict[str, Any]:
+        """Full snapshot of the config, stored in the scheduler's run summary."""
         return {
             "grade_schedules": {
                 grade: [
@@ -738,12 +745,14 @@ MAX_SERVICE_GROUP_SIZE = {
 
 
 def full_student_name(student: Dict[str, Any]) -> str:
+    """"First Last", falling back to the student ID when both names are blank."""
     first = student.get("first_name", "")
     last = student.get("last_name", "")
     return f"{first} {last}".strip() or student.get("student_id", "Unknown Student")
 
 
 def staff_full_name(staff: Dict[str, Any]) -> str:
+    """"First Last" -- the name the scheduler uses to identify a teacher."""
     return f"{staff.get('first_name', '')} {staff.get('last_name', '')}".strip()
 
 
