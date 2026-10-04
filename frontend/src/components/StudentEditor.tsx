@@ -19,7 +19,7 @@ const SERVICE_TYPES = [
   "OT",
   "PT",
   "Speech",
-  "SETSS",
+  "Resource Room",
   "ICT",
   "Counseling",
 ];

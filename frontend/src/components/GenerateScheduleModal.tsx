@@ -761,7 +761,7 @@ export default function GenerateScheduleModal({ onClose, onGenerated }: Generate
                 Decide where services may happen. Pull-outs only land in blocks that allow them, and
                 among those the scheduler prefers higher scores (I-Block 1000 is ideal; −400 means
                 avoid unless there's no other time). Push-ins also need the service's own subject,
-                e.g. SETSS for ELA pushes into ELA.
+                e.g. Resource Room for ELA pushes into ELA.
               </p>
 
               <div className="gsm-policy-list">

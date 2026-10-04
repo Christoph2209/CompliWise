@@ -51,7 +51,7 @@ export default function Staff() {
               <span className={`badge ${member.is_certified_sped ? "yes" : "no"}`}>SpEd</span>
               <span className={`badge ${member.is_certified_enl ? "yes" : "no"}`}>ENL</span>
               <span className={`badge ${member.is_certified_slp ? "yes" : "no"}`}>SLP</span>
-              <span className={`badge ${member.can_deliver_setss ? "yes" : "no"}`}>SETSS</span>
+              <span className={`badge ${member.can_deliver_setss ? "yes" : "no"}`}>Resource Room</span>
             </div>
 
             <div className="staff-footer">

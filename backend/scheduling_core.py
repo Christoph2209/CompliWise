@@ -85,9 +85,25 @@ def max_same_service_per_day(service_type: str) -> int:
 
 MIN_DAYS_BETWEEN_SAME_SERVICE = 0
 
+# Resource Room was called SETSS in older data and exports. Anything
+# read from the DB or a CSV goes through canonical_service_type() so
+# the engine only ever sees the current name.
+RESOURCE_ROOM = "Resource Room"
+SERVICE_TYPE_ALIASES = {
+    "setss": RESOURCE_ROOM,
+    "resource room": RESOURCE_ROOM,
+}
+
+
+def canonical_service_type(service_type: Optional[str]) -> Optional[str]:
+    if not service_type:
+        return service_type
+    return SERVICE_TYPE_ALIASES.get(str(service_type).strip().lower(), service_type)
+
+
 SERVICE_SESSION_LENGTH_MINUTES = {
     "ENL": 45,
-    "SETSS": 45,
+    RESOURCE_ROOM: 45,
     "Speech": 30,
     "OT": 30,
     "PT": 30,
@@ -150,11 +166,11 @@ SUBJECT_ALIASES = {
 
 # Which block subjects a provider may push into, per service. A
 # StudentService.subject_area that names an allowed push-in subject
-# overrides this (e.g. SETSS with subject_area "Math" -> Math only).
+# overrides this (e.g. Resource Room with subject_area "Math" -> Math only).
 DEFAULT_PUSHIN_SUBJECTS: Dict[str, List[str]] = {
     "ENL": ["ELA", "SS/Sci"],   # integrated ENL is delivered inside content instruction
     "ICT": ["ELA", "Math"],
-    "SETSS": ["ELA", "Math"],
+    RESOURCE_ROOM: ["ELA", "Math"],
     "Speech": ["ELA"],
     "OT": ["ELA"],              # fine-motor / handwriting during writing
     "Counseling": ["SS/Sci"],
@@ -186,44 +202,43 @@ GRADE_ALIASES = {
 # ---------------------------------------------------------------
 _DEFAULT_ROWS: Dict[str, List[Tuple[str, str, str]]] = {
     "K": [
-        ("Math", "08:20", "09:15"), ("ELA", "09:15", "09:20"),
-        ("I-Block", "09:20", "10:05"), ("ELA", "10:05", "10:35"),
-        ("Lunch", "10:35", "11:05"), ("Recess", "11:05", "11:35"),
-        ("ELA", "11:35", "13:00"), ("Specials", "13:00", "13:40"),
-        ("ELA", "13:40", "13:45"), ("SS/Sci", "13:45", "14:30"),
+        ("Math", "08:20", "09:15"), ("I-Block", "09:15", "10:00"),
+        ("ELA", "10:00", "10:35"), ("Lunch", "10:35", "11:05"), 
+        ("Recess", "11:05", "11:35"), ("ELA", "11:35", "13:00"), 
+        ("Specials", "13:00", "13:45"), ("SS/Sci", "13:45", "14:45"),
     ],
     "1": [
-        ("ELA", "08:20", "09:00"), ("Specials", "09:00", "09:40"),
-        ("Math", "09:40", "10:35"), ("Recess", "10:35", "11:05"),
+        ("ELA", "08:20", "09:00"), ("Specials", "09:00", "09:45"),
+        ("Math", "09:45", "10:35"), ("Recess", "10:35", "11:05"),
         ("Lunch", "11:05", "11:35"), ("ELA", "11:35", "12:45"),
         ("I-Block", "12:45", "13:30"), ("ELA", "13:30", "13:45"),
-        ("SS/Sci", "13:45", "14:30"),
+        ("SS/Sci", "13:45", "14:45"),
     ],
     "2": [
         ("Math", "08:20", "09:20"), ("ELA", "09:20", "10:30"),
-        ("Specials", "10:30", "11:10"), ("ELA", "11:10", "11:40"),
+        ("Specials", "10:30", "11:15"), ("ELA", "11:15", "11:40"),
         ("Lunch", "11:40", "12:10"), ("Recess", "12:10", "12:40"),
         ("SS/Sci", "12:40", "13:25"), ("ELA", "13:25", "13:45"),
-        ("I-Block", "13:45", "14:30"),
+        ("I-Block", "13:45", "14:30"), ("ELA", "14:30", "14:45")
     ],
     "3": [
-        ("ELA", "08:20", "09:45"), ("Specials", "09:45", "10:25"),
-        ("ELA", "10:25", "11:00"), ("I-Block", "11:00", "11:45"),
+        ("Math", "08:20", "09:00"), ("ELA", "09:00", "9:45"),
+        ("Specials", "09:45", "10:30"), ("ELA", "10:30", "11:00"),
+        ("I-Block", "11:00", "11:45"),
         ("Math", "11:45", "12:45"), ("Lunch", "12:45", "13:15"),
-        ("Recess", "13:15", "13:45"), ("SS/Sci", "13:45", "14:30"),
+        ("Recess", "13:15", "13:45"), ("SS/Sci", "13:45", "14:45"),
     ],
     "4": [
-        ("ELA", "08:20", "08:30"), ("I-Block", "08:30", "09:15"),
-        ("Math", "09:15", "10:15"), ("ELA", "10:15", "11:15"),
-        ("Specials", "11:15", "11:55"), ("ELA", "11:55", "12:45"),
-        ("Recess", "12:45", "13:15"), ("Lunch", "13:15", "13:45"),
-        ("SS/Sci", "13:45", "14:30"),
+        ("I-Block", "08:20", "09:05"), ("Math", "09:05", "10:15"),
+        ("ELA", "10:15", "11:15"), ("Specials", "11:15", "12:00"), 
+        ("ELA", "12:00", "12:45"), ("Recess", "12:45", "13:15"), 
+        ("Lunch", "13:15", "13:45"), ("SS/Sci", "13:45", "14:45"),
     ],
     "5": [
         ("Math", "08:20", "09:20"), ("ELA", "09:20", "10:10"),
         ("I-Block", "10:10", "10:55"), ("SS/Sci", "10:55", "11:40"),
         ("Recess", "11:40", "12:10"), ("Lunch", "12:10", "12:40"),
-        ("ELA", "12:40", "13:45"), ("Specials", "13:45", "14:25"),
+        ("ELA", "12:40", "14:00"), ("Specials", "14:00", "14:45"),
     ],
 }
 
@@ -708,7 +723,7 @@ FLEX_FOCUS_BY_NEED = {
 }
 
 MAX_SERVICE_GROUP_SIZE = {
-    "SETSS": 8,
+    RESOURCE_ROOM: 5,
     "ICT": 30,
     "ENL": 25,
     "Speech": 5,
@@ -750,9 +765,10 @@ def get_student_services(student: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     if db_services:
         for service in db_services:
+            service_type = canonical_service_type(service.get("service_type")) or RESOURCE_ROOM
             services.append({
-                "subject": service.get("subject") or service.get("service_type") or "IEP Support",
-                "service_type": service.get("service_type") or "SETSS",
+                "subject": canonical_service_type(service.get("subject")) or service_type,
+                "service_type": service_type,
                 "minutes": int(service.get("minutes") or service.get("minutes_per_week") or 30),
                 "is_pullout": bool(service.get("is_pullout", True)),
                 "subject_area": service.get("subject_area"),
@@ -760,7 +776,7 @@ def get_student_services(student: Dict[str, Any]) -> List[Dict[str, Any]]:
     elif student.get("has_iep"):
         services.append({
             "subject": "IEP Support",
-            "service_type": "SETSS",
+            "service_type": RESOURCE_ROOM,
             "minutes": 30,
             "is_pullout": True,
             "subject_area": None,

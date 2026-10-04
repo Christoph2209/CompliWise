@@ -116,7 +116,7 @@ export default function StaffEditModal({ staff, onClose, onSaved }: StaffEditMod
                 checked={form.can_deliver_setss}
                 onChange={() => toggle("can_deliver_setss")}
               />
-              Can Deliver SETSS
+              Can Deliver Resource Room
             </label>
           </div>
         </div>
