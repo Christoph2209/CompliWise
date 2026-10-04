@@ -214,16 +214,38 @@ def test_schedule_generation_stays_inside_one_school():
     assert admin_b.get(f"/schedule-runs/{runs_a[0]['id']}").status_code == 404
     assert admin_b.get("/schedule").json() == []
 
-    # A teacher linked to a staff member sees only their own entries.
+    # A teacher sees their own entries plus the pull-outs of students they
+    # teach (delivered by ENL/IEP providers), and nothing else.
     all_entries = admin_a.get("/schedule").json()
-    some_staff_id = next(e["staff_id"] for e in all_entries if e["staff_id"])
+
+    def is_pullout(e):
+        return e["delivery"] == "pullout" or (e["delivery"] is None and e["is_pullout"])
+
+    pullout = next(
+        p for p in all_entries
+        if is_pullout(p) and any(
+            e["student_id"] == p["student_id"] and e["staff_id"]
+            and e["staff_id"] != p["staff_id"] and not is_pullout(e)
+            for e in all_entries
+        )
+    )
+    some_staff_id = next(
+        e["staff_id"] for e in all_entries
+        if e["student_id"] == pullout["student_id"] and e["staff_id"]
+        and e["staff_id"] != pullout["staff_id"] and not is_pullout(e)
+    )
     db = SessionLocal()
     teacher = db.query(User).filter(User.email == users_a["teacher"]).first()
     teacher.staff_id = uuid.UUID(some_staff_id)
     db.commit()
     db.close()
     mine = teacher_a.get("/schedule").json()
-    assert mine and all(e["staff_id"] == some_staff_id for e in mine)
+    my_students = {e["student_id"] for e in mine if e["staff_id"] == some_staff_id}
+    assert pullout["id"] in {e["id"] for e in mine}
+    assert all(
+        e["staff_id"] == some_staff_id or (is_pullout(e) and e["student_id"] in my_students)
+        for e in mine
+    )
     assert len(mine) < len(all_entries)
     assert admin_b.get("/compliance-flags").json() == []
 
