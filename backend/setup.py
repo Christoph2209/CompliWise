@@ -79,10 +79,12 @@ def admin_exists(db: Session) -> bool:
 
 
 def is_setup_complete(db: Session) -> bool:
+    """True once the database is reachable and an admin account exists."""
     return db_connectable(db) and admin_exists(db)
 
 
 def run_migrations() -> None:
+    """Run `alembic upgrade head`, wrapping any failure in SetupError."""
     if not ALEMBIC_INI_PATH.exists():
         raise SetupError(
             f"alembic.ini not found at {ALEMBIC_INI_PATH}. Setup expects it "
@@ -106,6 +108,11 @@ def create_school_and_admin(
     admin_password: str,
     admin_full_name: Optional[str],
 ) -> tuple[School, User]:
+    """
+    Create (or reuse, matched by name) the school and its first admin user,
+    committing both together. Raises SetupError if an admin already exists
+    or the email is taken.
+    """
     if admin_exists(db):
         raise SetupError("Setup has already been completed -- an admin account already exists.")
 

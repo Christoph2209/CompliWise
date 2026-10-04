@@ -25,7 +25,6 @@ from auth_utils import hash_password, verify_password
 from compliance import run_all_compliance_checks
 from database_service import (
     DBAPIError,
-    DBConfigError,
     create_compliance_flags,
     create_flex_group_students,
     create_flex_groups,
@@ -716,7 +715,7 @@ def list_students(
         )
         return {"students": students, "count": len(students)}
 
-    except (DBConfigError, DBAPIError) as error:
+    except DBAPIError as error:
         raise HTTPException(status_code=500, detail=str(error))
 
 
@@ -1074,7 +1073,7 @@ def suggest_times_for_service(
     try:
         students = get_students(school_id=user.school_id)
         staff = get_staff(school_id=user.school_id)
-    except (DBConfigError, DBAPIError) as error:
+    except DBAPIError as error:
         raise HTTPException(status_code=500, detail=str(error))
 
     student = next((s for s in students if str(s.get("id")) == student_id), None)
@@ -1215,7 +1214,7 @@ def list_staff(user: User = Depends(require_roles(*ALL_STAFF))):
         staff = get_staff(school_id=user.school_id)
         return {"staff": staff, "count": len(staff)}
 
-    except (DBConfigError, DBAPIError) as error:
+    except DBAPIError as error:
         raise HTTPException(status_code=500, detail=str(error))
 
 @app.post("/staff")
@@ -1591,7 +1590,7 @@ def preview_priority(user: User = Depends(require_roles(*MANAGERS))):
             "summary": result["summary"],
         }
 
-    except (DBConfigError, DBAPIError) as error:
+    except DBAPIError as error:
         raise HTTPException(status_code=500, detail=str(error))
 
 
@@ -1822,7 +1821,7 @@ def save_schedule(
             "schedule_run_id": schedule_run_id,
         }
 
-    except (DBConfigError, DBAPIError) as error:
+    except DBAPIError as error:
         raise HTTPException(status_code=500, detail=str(error))
 
 
@@ -1866,7 +1865,7 @@ def reset_generated_schedules(request: Request, user: User = Depends(require_rol
             },
         }
 
-    except (DBConfigError, DBAPIError) as error:
+    except DBAPIError as error:
         raise HTTPException(status_code=500, detail=str(error))
 
 def _run_schedule_job(job_id: str, config: ScheduleGenerationConfig, user_id=None, school_id=None):
@@ -1963,7 +1962,7 @@ def _run_schedule_job(job_id: str, config: ScheduleGenerationConfig, user_id=Non
         finally:
             db.close()
 
-    except (DBConfigError, DBAPIError) as error:
+    except DBAPIError as error:
         SCHEDULE_JOBS[job_id].update({"status": "error", "error": str(error)})
     except Exception as error:  # catch-all so a bad thread doesn't die silently
         SCHEDULE_JOBS[job_id].update({"status": "error", "error": str(error)})
@@ -2134,7 +2133,7 @@ def run_compliance_check(user: User = Depends(require_roles(*MANAGERS))):
             "schedule_run_id": schedule_run_id,
         }
 
-    except (DBConfigError, DBAPIError) as error:
+    except DBAPIError as error:
         raise HTTPException(status_code=500, detail=str(error))
     
 

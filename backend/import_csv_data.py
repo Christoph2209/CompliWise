@@ -1,4 +1,20 @@
-# import_csv_data.py
+"""
+import_csv_data.py
+
+Loads students, staff and IEP services from CSV exports into the database.
+
+Two callers use this module:
+  * The setup wizard (setup.py / main.py) calls import_students,
+    import_staff and import_student_services with the path of an uploaded
+    file, after import_validation.py has checked it.
+  * Running it directly (`python backend/import_csv_data.py` from the
+    repo root) imports the demo CSVs in data/ into a "Demo School".
+
+Imports are upserts keyed on the external ID column (student_id /
+staff_id), so re-running the same file updates rows instead of
+duplicating them. Column names are matched loosely: both the snake_case
+export headers and friendlier spreadsheet headers ("First Name") work.
+"""
 
 import csv
 import json
@@ -17,12 +33,16 @@ from dmscheduler_db import (
 from scheduling_core import canonical_service_type
 
 
+# Default files for the command-line import. Relative paths, so run the
+# script from the repo root.
 STUDENTS_CSV = "./data/Student_export.csv"
-STAFF_CSV = "./data/StaffMember_export.csv"  # change to workers.csv if needed
+STAFF_CSV = "./data/StaffMember_export.csv"
 
 PathLike = Union[str, Path]
 
 
+# The CSV only gives a frequency ("2x/week"), not minutes, so each service
+# gets this placeholder length per session until staff verify the IEP.
 DEFAULT_SESSION_MINUTES = {
     "OT": 30,
     "PT": 30,
@@ -32,10 +52,12 @@ DEFAULT_SESSION_MINUTES = {
     "Psych": 30,
 }
 
+# Pulls the session count out of frequency strings like "2x/week".
 FREQ_PATTERN = re.compile(r"(\d+)\s*x")
 
 
 def yes_no(value):
+    """Read a CSV yes/no cell as a bool. Blank or unrecognized means False."""
     if value is None:
         return False
 
@@ -45,6 +67,7 @@ def yes_no(value):
 
 
 def clean(value, default=None):
+    """Strip a CSV cell; return `default` when it is missing or blank."""
     if value is None:
         return default
 
@@ -57,6 +80,7 @@ def clean(value, default=None):
 
 
 def to_int(value, default=0):
+    """Parse a CSV cell as an int (accepts "30" or "30.0"), else `default`."""
     try:
         return int(float(value))
     except Exception:
@@ -99,6 +123,7 @@ def parse_grade_from_notes(notes) -> Optional[str]:
 
 
 def get_or_create_school(db, name="Demo School"):
+    """Return the school with this name, creating it if needed (CLI import only)."""
     school = db.query(School).filter(School.name == name).first()
 
     if school:
@@ -140,6 +165,8 @@ def import_students(db, school, csv_path: Optional[PathLike] = None) -> int:
         reader = csv.DictReader(file)
 
         for row in reader:
+            # Prefer the school's own student number; fall back to the
+            # export's row id so the upsert still has a stable key.
             external_student_id = clean(
                 row.get("student_id")
                 or row.get("id")
@@ -149,6 +176,7 @@ def import_students(db, school, csv_path: Optional[PathLike] = None) -> int:
             first_name = clean(row.get("first_name") or row.get("First Name"), "")
             last_name = clean(row.get("last_name") or row.get("Last Name"), "")
 
+            # Skip fully blank rows (e.g. trailing lines from Excel).
             if not external_student_id and not first_name and not last_name:
                 continue
 
@@ -294,6 +322,7 @@ def import_staff(db, school, csv_path: Optional[PathLike] = None) -> int:
 
 
 def _parse_sessions_per_week(frequency: str | None) -> int | None:
+    """"2x/week" -> 2. None when the frequency is missing or unparseable."""
     if not frequency:
         return None
     match = FREQ_PATTERN.search(frequency)
@@ -310,6 +339,10 @@ def import_student_services(db, school, csv_path):
     with a placeholder default and flags every row as unverified --
     these numbers must be reviewed against actual IEP paperwork before
     they're trusted for compliance checks.
+
+    Students must already exist (run import_students first); rows whose
+    student_id isn't found are counted and skipped. Returns a dict of
+    counts for the setup wizard to display.
     """
     created = 0
     already_present = 0
@@ -411,6 +444,7 @@ def import_student_services(db, school, csv_path):
 
 
 def main():
+    """Command-line entry point: import the demo CSVs into "Demo School"."""
     db = SessionLocal()
 
     try:
