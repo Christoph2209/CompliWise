@@ -46,6 +46,30 @@ def get_default_school(db):
     return school
 
 
+def _resolve_school(db, school_id=None, run_id=None):
+    """
+    Which school a write belongs to. Preference order:
+      1. the school that owns run_id (so a run's rows can never be
+         written under a different school),
+      2. an explicit school_id,
+      3. get_default_school() -- ONLY for the legacy CLI scripts. The
+         API always passes school_id or run_id.
+    """
+    if run_id is not None:
+        run = db.query(ScheduleRun).filter(ScheduleRun.id == uuid.UUID(str(run_id))).first()
+        if not run:
+            raise DBAPIError(f"Schedule run {run_id} not found")
+        if school_id is not None and str(run.school_id) != str(school_id):
+            raise DBAPIError("Schedule run belongs to a different school")
+        return db.query(School).filter(School.id == run.school_id).first()
+
+    if school_id is not None:
+        school = db.query(School).filter(School.id == uuid.UUID(str(school_id))).first()
+        if not school:
+            raise DBAPIError(f"School {school_id} not found")
+        return school
+
+    return get_default_school(db)
 
 
 def get_students(
@@ -53,13 +77,18 @@ def get_students(
     search: str | None = None,
     grade: int | None = None,
     iep: bool | None = None,
-    mtss_tier: int | None = None
+    mtss_tier: int | None = None,
+    school_id=None,
 ) -> List[Dict[str, Any]]:
+    """school_id should always be passed by the API. None (all schools)
+    exists only for the legacy single-school CLI scripts."""
 
     db = SessionLocal()
 
     try:
         query = db.query(Student)
+        if school_id is not None:
+            query = query.filter(Student.school_id == uuid.UUID(str(school_id)))
 
         if search:
             query = query.filter(
@@ -119,11 +148,15 @@ def get_students(
     finally:
         db.close()
 
-def get_staff(active_only: bool = False) -> List[Dict[str, Any]]:
+def get_staff(active_only: bool = False, school_id=None) -> List[Dict[str, Any]]:
+    """school_id should always be passed by the API (see get_students)."""
     db = SessionLocal()
 
     try:
-        staff_members = db.query(StaffMember).all()
+        query = db.query(StaffMember)
+        if school_id is not None:
+            query = query.filter(StaffMember.school_id == uuid.UUID(str(school_id)))
+        staff_members = query.all()
 
         return [
             {
@@ -153,11 +186,12 @@ def create_schedule_run(
     school_year: str = "2026-2027",
     name: str = "Generated Schedule",
     summary: Dict[str, Any] | None = None,
+    school_id=None,
 ) -> str:
     db = SessionLocal()
 
     try:
-        school = get_default_school(db)
+        school = _resolve_school(db, school_id=school_id)
 
         run = ScheduleRun(
             id=uuid.uuid4(),
@@ -178,23 +212,29 @@ def create_schedule_run(
     finally:
         db.close()
 
-def _build_student_index(db) -> Dict[str, "Student"]:
+def _build_student_index(db, school_id=None) -> Dict[str, "Student"]:
     """Maps both external_student_id and str(UUID) to Student rows,
     so a single dict lookup replicates _find_student_by_scheduler_id's
     external-id-first, UUID-fallback matching without a query per call."""
     index: Dict[str, Student] = {}
-    for student in db.query(Student).all():
+    query = db.query(Student)
+    if school_id is not None:
+        query = query.filter(Student.school_id == school_id)
+    for student in query.all():
         if student.external_student_id:
             index[student.external_student_id] = student
         index[str(student.id)] = student
     return index
 
 
-def _build_staff_index(db) -> Dict[str, "StaffMember"]:
+def _build_staff_index(db, school_id=None) -> Dict[str, "StaffMember"]:
     """Maps the exact 'First Last'.strip() name to StaffMember, matching
     _find_staff_by_name's matching logic without a full-table scan per call."""
     index: Dict[str, StaffMember] = {}
-    for staff in db.query(StaffMember).all():
+    query = db.query(StaffMember)
+    if school_id is not None:
+        query = query.filter(StaffMember.school_id == school_id)
+    for staff in query.all():
         full_name = f"{staff.first_name} {staff.last_name}".strip()
         index[full_name] = staff
     return index
@@ -229,6 +269,7 @@ def create_flex_group_students(
     db = SessionLocal()
     try:
         run_uuid = uuid.UUID(run_id)
+        school = _resolve_school(db, run_id=run_id)
 
         flex_groups_in_run = (
             db.query(FlexGroup)
@@ -241,7 +282,7 @@ def create_flex_group_students(
             for fg in flex_groups_in_run
         }
 
-        student_index = _build_student_index(db)
+        student_index = _build_student_index(db, school.id)
 
         rows = []
         seen = set()  # guard against duplicates within this batch
@@ -287,6 +328,7 @@ def create_flex_group_students(
 def create_schedule_entries(
     entries: List[Dict[str, Any]],
     run_id: str | None = None,
+    school_id=None,
 ) -> Any:
     if not entries:
         return []
@@ -294,19 +336,20 @@ def create_schedule_entries(
     db = SessionLocal()
 
     try:
-        school = get_default_school(db)
-
         if run_id is None:
             run_id = create_schedule_run(
                 school_year="2026-2027",
                 name="Generated Schedule",
                 summary={"schedule_entries_created": len(entries)},
+                school_id=school_id,
             )
+
+        school = _resolve_school(db, school_id=school_id, run_id=run_id)
 
         run_uuid = uuid.UUID(run_id)
 
-        student_index = _build_student_index(db)
-        staff_index = _build_staff_index(db)
+        student_index = _build_student_index(db, school.id)
+        staff_index = _build_staff_index(db, school.id)
 
         rows = []
         unmatched_students = set()
@@ -388,9 +431,9 @@ def create_staff_schedule_entries(
     db = SessionLocal()
 
     try:
-        school = get_default_school(db)
+        school = _resolve_school(db, run_id=run_id)
         run_uuid = uuid.UUID(run_id)
-        staff_index = _build_staff_index(db)
+        staff_index = _build_staff_index(db, school.id)
 
         rows = []
         unmatched_staff = set()
@@ -453,6 +496,7 @@ def create_staff_schedule_entries(
 def create_compliance_flags(
     flags: List[Dict[str, Any]],
     run_id: str | None = None,
+    school_id=None,
 ) -> Any:
     if not flags:
         return []
@@ -460,15 +504,16 @@ def create_compliance_flags(
     db = SessionLocal()
 
     try:
-        school = get_default_school(db)
-        student_index = _build_student_index(db)
-
         if run_id is None:
             run_id = create_schedule_run(
                 school_year="2026-2027",
                 name="Generated Schedule Flags",
                 summary={"compliance_flags_created": len(flags)},
+                school_id=school_id,
             )
+
+        school = _resolve_school(db, school_id=school_id, run_id=run_id)
+        student_index = _build_student_index(db, school.id)
 
         run_uuid = uuid.UUID(run_id)
 
@@ -513,6 +558,7 @@ def create_compliance_flags(
 def create_flex_groups(
     groups: List[Dict[str, Any]],
     run_id: str | None = None,
+    school_id=None,
 ) -> Any:
     if not groups:
         return []
@@ -520,15 +566,16 @@ def create_flex_groups(
     db = SessionLocal()
 
     try:
-        school = get_default_school(db)
-        staff_index = _build_staff_index(db)
-
         if run_id is None:
             run_id = create_schedule_run(
                 school_year="2026-2027",
                 name="Generated Flex Groups",
                 summary={"flex_groups_created": len(groups)},
+                school_id=school_id,
             )
+
+        school = _resolve_school(db, school_id=school_id, run_id=run_id)
+        staff_index = _build_staff_index(db, school.id)
 
         run_uuid = uuid.UUID(run_id)
 
@@ -661,7 +708,10 @@ def create_schedule_proposal(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def delete_entity_many(entity_name: str, query: dict):
+def delete_entity_many(entity_name: str, query: dict, school_id=None):
+    """Deletes every row of entity_name for school_id. school_id=None
+    (every school) is refused unless the caller is a legacy CLI script
+    passing query={"__all_schools__": True}."""
     db = SessionLocal()
 
     try:
@@ -680,7 +730,12 @@ def delete_entity_many(entity_name: str, query: dict):
                 "message": f"No local delete mapping for {entity_name}",
             }
 
-        deleted = db.query(model).delete()
+        q = db.query(model)
+        if school_id is not None:
+            q = q.filter(model.school_id == uuid.UUID(str(school_id)))
+        elif not query.get("__all_schools__"):
+            raise DBAPIError("delete_entity_many requires school_id")
+        deleted = q.delete(synchronize_session=False)
         db.commit()
 
         return {

@@ -16,13 +16,12 @@ Everything here is written to be safe to call more than once:
     so re-hitting /setup/initialize after setup is done fails loudly
     instead of creating a second admin or a duplicate school.
 
-NOTE on security: /setup/* endpoints in main.py are intentionally
+NOTE on security: /setup/status and /setup/initialize are intentionally
 unauthenticated, since there's no user to authenticate as before setup
-has run. admin_exists() is what gates them closed afterward. This is a
-known-narrow trust model (same family of issue as the CURRENT_USER
-global-state auth gap already tracked) -- once real session/token auth
-is in place, /setup/import-csv in particular should additionally require
-an authenticated admin, not just "no admin yet vs. admin exists".
+has run; admin_exists() is what gates /setup/initialize closed
+afterward. /setup/initialize logs the new admin in, and
+/setup/import-csv requires that admin session like any other
+admin-only endpoint.
 """
 
 from __future__ import annotations
