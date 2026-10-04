@@ -40,8 +40,11 @@ from scheduling_core import (
     SPECIALS_MANDATED_MINUTES_PER_WEEK,
 )
 
+# Entry `delivery` values that count as delivering a service (vs. a regular class).
 SERVICE_DELIVERIES = ("pullout", "push_in")
 
+# Services that need a specially qualified provider: which StaffMember
+# flag qualifies someone, and the label used in staffing flags.
 IEP_RELATED_SERVICES = {
     "speech": {"cert_field": "is_certified_slp", "label": "Speech/Language (SLP)", "service_type": "Speech"},
     "resource room": {"cert_field": "can_deliver_setss", "label": "Resource Room / IEP Support", "service_type": "Resource Room"},
@@ -52,6 +55,7 @@ IEP_RELATED_SERVICES = {
 def _flag(student_id, flag_type, severity, title, description,
           legal_reference="School scheduling constraint",
           affected_period="weekly schedule") -> Dict[str, Any]:
+    """Build one compliance-flag dict in the shape database_service saves."""
     return {
         "student_id": student_id,
         "flag_type": flag_type,
@@ -80,6 +84,7 @@ def _interval(entry: Dict[str, Any]) -> Tuple[int, int]:
 
 
 def _is_service(entry: Dict[str, Any]) -> bool:
+    """True for a pull-out or push-in service session (not a regular class)."""
     return entry.get("delivery") in SERVICE_DELIVERIES
 
 
@@ -426,6 +431,12 @@ def validate_pullout_limits(
     students_by_id: Dict[str, Dict[str, Any]],
     period_config: PeriodConfig,
 ) -> List[Dict[str, Any]]:
+    """
+    Per student per day, flag:
+      * more pull-outs than period_config.max_pullouts_per_day,
+      * pull-outs closer together than period_config.min_gap_minutes,
+      * the same service more often than max_same_service_per_day allows.
+    """
     flags: List[Dict[str, Any]] = []
     pullouts: Dict[Tuple[str, str], List[Tuple[int, int]]] = {}
     service_counts: Counter = Counter()
@@ -480,6 +491,7 @@ def validate_pullout_limits(
 
 
 def required_minutes_by_service(student: Dict[str, Any]) -> Dict[str, int]:
+    """Weekly minutes the student is owed, summed per service type."""
     totals: Dict[str, int] = {}
     for svc in get_student_services(student):
         totals[svc["service_type"]] = totals.get(svc["service_type"], 0) + svc["minutes"]

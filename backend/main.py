@@ -1,26 +1,44 @@
-"""CompliWise Scheduler Engine API."""
+"""
+main.py
+
+CompliWise Scheduler Engine API (FastAPI). Run with `uvicorn main:app`.
+
+Login is a server-side session cookie (POST /login). Every endpoint
+declares which roles may call it (see the role groups below) and filters
+every query by the caller's school, so schools never see each other's data.
+
+Sections, in order: app setup, auth, first-run setup, CSV import, users,
+students, student services, staff, schedules, schedule runs and
+generation, compliance flags, flex groups, audit log.
+
+Environment:
+  DATABASE_URL    Postgres connection string (required)
+  SESSION_SECRET  signs the session cookie (required)
+  CORS_ORIGINS    comma-separated frontend origins (default http://localhost:5173)
+  COOKIE_SECURE   "true" to send the cookie over HTTPS only
+  SCHOOL_YEAR     label stored on schedule runs (default 2026-2027)
+"""
 from __future__ import annotations
 
-from typing import Any
 import os
-import setup as setup_module
-import uuid
-import threading
 import shutil
 import tempfile
-
+import threading
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
-from fastapi import File, UploadFile, Request
-from import_csv_data import import_student_services, import_students, import_staff
-from import_validation import validate_staff_csv, validate_students_csv, summarize_errors
+from typing import Any
 from uuid import UUID
-from fastapi import Depends, FastAPI, HTTPException
+
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import and_, exists, func, or_
 from sqlalchemy.orm import Session, aliased
 from starlette.middleware.sessions import SessionMiddleware
-from dotenv import load_dotenv
+
+import setup as setup_module
 from auth_utils import hash_password, verify_password
 from compliance import run_all_compliance_checks
 from database_service import (
@@ -50,9 +68,11 @@ from dmscheduler_db import (
     User,
     AuditLog,
 )
-from datetime import datetime, timezone
+from import_csv_data import import_student_services, import_students, import_staff
+from import_validation import validate_staff_csv, validate_students_csv, summarize_errors
 from scheduler import schedule_iep_services_first, suggest_service_slots
 from scheduling_core import PeriodConfig, day_index, format_range
+
 # ---------------------------------------------------------------------------
 # App setup
 # ---------------------------------------------------------------------------
@@ -84,13 +104,16 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 def get_db():
+    """FastAPI dependency: one database session per request, always closed."""
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
 
+
 def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
+    """The logged-in, active user from the session cookie, else 401."""
     user_id = request.session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="Not logged in")
@@ -134,6 +157,7 @@ def require_roles(*roles: str):
 
 
 def _client_ip(request: Request) -> str | None:
+    """Caller's IP address, for the audit log."""
     return request.client.host if request.client else None
 
 
@@ -146,7 +170,7 @@ def _parse_uuid(value: str, what: str = "Record") -> UUID:
 
 
 # ---------------------------------------------------------------------------
-# Pydantic models
+# Pydantic models (request bodies)
 # ---------------------------------------------------------------------------
 class StaffUpdate(BaseModel):
     grade: str | None = None
@@ -159,6 +183,8 @@ ALLOWED_STAFF_FIELDS = {
     "grade", "is_certified_sped", "is_certified_enl",
     "is_certified_slp", "can_deliver_setss"
 }
+
+
 class LoginRequest(BaseModel):
     email: str
     password: str
@@ -197,7 +223,8 @@ class StaffCreate(BaseModel):
     is_certified_slp: bool
     can_deliver_setss: bool
     max_students_per_group: int
-    
+
+
 class CreateUserRequest(BaseModel):
     email: EmailStr
     password: str
@@ -220,8 +247,11 @@ ALLOWED_SCHEDULE_ENTRY_FIELDS = {
 }
 VALID_DELIVERIES = {"pullout", "push_in", "class"}
 
+# Name given to runs that hold a whole-school schedule (vs. compliance-only runs).
 FULL_SCHEDULE_RUN_NAME = "Full School Schedule"
-    
+
+# Background generation jobs by job id, kept in memory: status is lost on
+# restart, and with several server processes a status poll may miss its job.
 SCHEDULE_JOBS: dict[str, dict] = {}
 
 # Index = the stage number scheduler.py passes to progress_callback.
@@ -234,24 +264,27 @@ SCHEDULE_STAGES = [
     "Building schedule proposals",
     "Saving schedule to database",
 ]
+
 # ---------------------------------------------------------------------------
 # Root / meta
 # ---------------------------------------------------------------------------
 
 @app.get("/")
 def root():
+    """Health check. Full endpoint list: /docs."""
     return {
         "message": "CompliWise Scheduler Engine is running",
         "endpoints": [
             "/students",
             "/staff",
             "/schedule",
-            "/generate-schedule",
+            "/schedule/generate/start",
             "/save-schedule",
             "/compliance-flags",
             "/flex_groups",
         ],
     }
+
 
 def _jsonable(data: dict) -> dict:
     """Coerces UUID/datetime values so a dict can be stored in a JSONB column."""
@@ -282,6 +315,7 @@ def _entry_time_fields(entry) -> dict:
 
 
 def _latest_full_run(db: Session, school_id) -> ScheduleRun | None:
+    """The school's most recent whole-school schedule run, or None."""
     return (
         db.query(ScheduleRun)
         .filter(ScheduleRun.school_id == school_id)
@@ -367,13 +401,14 @@ def write_audit_log(
     except Exception:
         db.rollback()
 
+
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
 
 @app.post("/login")
 def login(data: LoginRequest, request: Request, db: Session = Depends(get_db)):
-
+    """Check email/password and start a session. Every attempt is audit-logged."""
     user = db.query(User).filter(User.email == data.email).first()
 
     if not user or not verify_password(data.password, user.password_hash):
@@ -406,6 +441,7 @@ def login(data: LoginRequest, request: Request, db: Session = Depends(get_db)):
 
 @app.post("/logout")
 def logout(request: Request, db: Session = Depends(get_db)):
+    """End the session."""
     user_id = request.session.get("user_id")
     request.session.clear()
     if user_id:
@@ -417,8 +453,14 @@ def logout(request: Request, db: Session = Depends(get_db)):
         )
     return {"success": True}
 
+
+# ---------------------------------------------------------------------------
+# First-run setup (open until an admin exists; see setup.py)
+# ---------------------------------------------------------------------------
+
 @app.get("/setup/status")
 def get_setup_status(db: Session = Depends(get_db)):
+    """Whether the database is reachable and setup has been completed."""
     connectable = setup_module.db_connectable(db)
     return {
         "database_connectable": connectable,
@@ -428,6 +470,10 @@ def get_setup_status(db: Session = Depends(get_db)):
 
 @app.post("/setup/initialize")
 def initialize_setup(payload: SetupInitializeRequest, request: Request, db: Session = Depends(get_db)):
+    """
+    Run migrations, create the school and its first admin, and log that
+    admin in. Refused (409) once an admin exists.
+    """
     try:
         setup_module.run_migrations()
     except setup_module.SetupError as error:
@@ -475,6 +521,7 @@ def initialize_setup(payload: SetupInitializeRequest, request: Request, db: Sess
 # ---------------------------------------------------------------------------
 
 def _save_upload(upload: UploadFile | None, folder: str, name: str) -> Path | None:
+    """Write an uploaded file into `folder`; None when nothing was uploaded."""
     if upload is None:
         return None
     path = Path(folder) / name
@@ -484,6 +531,7 @@ def _save_upload(upload: UploadFile | None, folder: str, name: str) -> Path | No
 
 
 def _validate_uploads(db: Session, school_id, students_path, staff_path):
+    """Run import_validation on whichever files were uploaded."""
     reports = []
     if students_path:
         reports.append(validate_students_csv(db, school_id, students_path))
@@ -493,6 +541,7 @@ def _validate_uploads(db: Session, school_id, students_path, staff_path):
 
 
 def _commit_import(db: Session, user: User, students_path, staff_path, request: Request) -> dict:
+    """Import already-validated files into the user's school and audit-log the counts."""
     school = db.query(School).filter(School.id == user.school_id).first()
     if not school:
         raise HTTPException(status_code=400, detail="Your account isn't linked to a school.")
@@ -585,9 +634,9 @@ def setup_import_csv(
 ):
     """
     The setup wizard's import step. /setup/initialize logs the new admin
-    in, so this is an ordinary admin-only request -- before this change
-    it was open to anyone once setup had finished.
-    Errors come back as one string because the wizard shows `detail` as text.
+    in, so this is an ordinary admin-only request. Same validation as
+    /import/commit, but errors come back as one string because the
+    wizard shows `detail` as text.
     """
     with tempfile.TemporaryDirectory() as tmpdir:
         students_path = _save_upload(students_file, tmpdir, "students.csv")
@@ -601,8 +650,14 @@ def setup_import_csv(
 
         return _commit_import(db, user, students_path, staff_path, request)
 
+
+# ---------------------------------------------------------------------------
+# Current user and admin
+# ---------------------------------------------------------------------------
+
 @app.get("/me")
 def get_me(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """The logged-in user, with their linked staff member if any."""
     staff = None
 
     if user.staff_id:
@@ -624,10 +679,7 @@ def get_me(user: User = Depends(get_current_user), db: Session = Depends(get_db)
             else None
         ),
     }
-    
-# ---------------------------------------------------------------------------
-# Admin
-# ---------------------------------------------------------------------------
+
 
 @app.post("/admin/users")
 def add_user(
@@ -635,6 +687,7 @@ def add_user(
     admin: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Admin only: create a login in the admin's school, optionally linked to a staff member."""
     if admin.role != "admin":
         raise HTTPException(status_code=403, detail="Only admins can add users")
 
@@ -665,7 +718,7 @@ def add_user(
 
     new_user = User(
         email=payload.email,
-        password_hash=hash_password(payload.password),  # use whatever your auth module uses
+        password_hash=hash_password(payload.password),
         role=payload.role,
         staff_id=payload.staff_id,
         school_id=admin.school_id,  # scope new user to the admin's school
@@ -676,11 +729,13 @@ def add_user(
 
     return {"id": str(new_user.id), "email": new_user.email, "role": new_user.role}
 
+
 @app.get("/admin/staff/unassigned")
 def get_unassigned_staff(
     admin: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Admin only: staff members with no login yet (for the Add User form)."""
     if admin.role != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
 
@@ -708,6 +763,7 @@ def list_students(
     mtss_tier: int | None = None,
     user: User = Depends(require_roles(*MANAGERS)),
 ):
+    """The school's students with their services, optionally filtered."""
     try:
         students = get_students(
             search=search, grade=grade, iep=iep, mtss_tier=mtss_tier,
@@ -726,6 +782,7 @@ def update_student(
     request: Request,
     user: User = Depends(require_roles(*MANAGERS)),
 ):
+    """Edit a student's basic fields; only fields sent are changed."""
     db = SessionLocal()
 
     try:
@@ -772,6 +829,10 @@ def update_student(
 
 @app.get("/students/{student_id}/schedule")
 def get_student_schedule(student_id: str, user: User = Depends(require_roles(*ALL_STAFF))):
+    """
+    Every schedule entry for one student (by school student ID). Teachers
+    and aides may only look up students they teach.
+    """
     db = SessionLocal()
 
     try:
@@ -928,6 +989,7 @@ def create_student_service(
     request: Request,
     user: User = Depends(require_roles(*MANAGERS)),
 ):
+    """Add a service requirement (e.g. 90 min/week of ENL) to a student."""
     db = SessionLocal()
     try:
         student = (
@@ -993,6 +1055,7 @@ def create_student_service(
 
 @app.get("/students/{student_id}/services")
 def list_student_services(student_id: str, user: User = Depends(require_roles(*MANAGERS))):
+    """A student's service requirements."""
     db = SessionLocal()
     try:
         student = (
@@ -1110,6 +1173,7 @@ def update_student_service(
     request: Request,
     user: User = Depends(require_roles(*MANAGERS)),
 ):
+    """Edit one of a student's service requirements."""
     db = SessionLocal()
     try:
         service = (
@@ -1167,6 +1231,7 @@ def delete_student_service(
     request: Request,
     user: User = Depends(require_roles(*MANAGERS)),
 ):
+    """Remove one of a student's service requirements."""
     db = SessionLocal()
     try:
         service = (
@@ -1210,12 +1275,14 @@ def delete_student_service(
 
 @app.get("/staff")
 def list_staff(user: User = Depends(require_roles(*ALL_STAFF))):
+    """The school's staff members."""
     try:
         staff = get_staff(school_id=user.school_id)
         return {"staff": staff, "count": len(staff)}
 
     except DBAPIError as error:
         raise HTTPException(status_code=500, detail=str(error))
+
 
 @app.post("/staff")
 def create_staff(
@@ -1224,6 +1291,7 @@ def create_staff(
     user: User = Depends(require_roles(*MANAGERS)),
     db: Session = Depends(get_db),
 ):
+    """Add a staff member to the caller's school."""
     try:
         data = staff.dict(exclude={"school_id"})
         db_staff = StaffMember(**data, school_id=user.school_id)
@@ -1267,6 +1335,7 @@ def create_staff(
         # Don't echo raw database errors (they can include other rows' data).
         raise HTTPException(status_code=400, detail="Couldn't create staff member. Check the fields and try again.")
 
+
 @app.put("/staff/{staff_id}")
 def update_staff(
     staff_id: str,
@@ -1274,6 +1343,7 @@ def update_staff(
     request: Request,
     user: User = Depends(require_roles(*MANAGERS)),
 ):
+    """Edit a staff member's grade and certifications."""
     db = SessionLocal()
     try:
         staff = (
@@ -1323,33 +1393,6 @@ def update_staff(
         }
     finally:
         db.close()
-
-@app.get("/my-schedule")
-def my_schedule(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if user.role != "teacher":
-        raise HTTPException(status_code=403, detail="Not allowed")
-
-    if not user.staff_id:
-        raise HTTPException(status_code=400, detail="Teacher account is not linked")
-
-    entries = db.query(ScheduleEntry).filter(ScheduleEntry.staff_id == user.staff_id).all()
-
-    return [
-        {
-            "id": str(e.id),
-            "day_of_week": e.day_of_week,
-            "period": e.period,
-            "period_label": e.period_label,
-            "subject": e.subject,
-            "student_name": e.student_name,
-            "service_type": e.service_type,
-            "is_pullout": e.is_pullout,
-            "is_flex_period": e.is_flex_period,
-            **_entry_time_fields(e),
-        }
-        for e in entries
-    ]
-
 
 # ---------------------------------------------------------------------------
 # Schedule
@@ -1428,6 +1471,7 @@ def update_schedule_entry(
     request: Request,
     user: User = Depends(require_roles(*MANAGERS)),
 ):
+    """Manually edit one schedule entry (teacher, time, room, ...). Unknown fields are rejected."""
     unknown = set(payload) - ALLOWED_SCHEDULE_ENTRY_FIELDS
     if unknown:
         raise HTTPException(
@@ -1627,6 +1671,7 @@ def get_schedule_config_defaults(user: User = Depends(require_roles(*MANAGERS)))
 
 @app.get("/schedule-runs")
 def list_schedule_runs(user: User = Depends(require_roles(*MANAGERS))):
+    """The school's schedule runs, newest first, with entry counts and open critical flag counts."""
     db = SessionLocal()
     try:
         runs = (
@@ -1672,8 +1717,10 @@ def list_schedule_runs(user: User = Depends(require_roles(*MANAGERS))):
     finally:
         db.close()
 
+
 @app.get("/schedule-runs/{run_id}")
 def get_schedule_run(run_id: str, user: User = Depends(require_roles(*MANAGERS))):
+    """One schedule run with its entries, compliance flags and summary (including its master schedule)."""
     db = SessionLocal()
     try:
         run = (
@@ -1754,6 +1801,10 @@ def save_schedule(
     request: Request,
     user: User = Depends(require_roles(*MANAGERS)),
 ):
+    """
+    Generate and save a full schedule in one request (blocks until done).
+    The UI uses /schedule/generate/start instead, which reports progress.
+    """
     try:
         period_config = PeriodConfig.from_config(config)
     except ValueError as error:
@@ -1868,7 +1919,9 @@ def reset_generated_schedules(request: Request, user: User = Depends(require_rol
     except DBAPIError as error:
         raise HTTPException(status_code=500, detail=str(error))
 
+
 def _run_schedule_job(job_id: str, config: ScheduleGenerationConfig, user_id=None, school_id=None):
+    """Background thread body: generate and save a schedule, updating SCHEDULE_JOBS[job_id] as it goes."""
     def progress(stage_index: int, message: str | None = None):
         SCHEDULE_JOBS[job_id].update({
             "current_stage": stage_index,
@@ -1974,6 +2027,7 @@ def start_schedule_generation(
     request: Request,
     user: User = Depends(require_roles(*MANAGERS)),
 ):
+    """Start generating a schedule in the background; poll /schedule/generate/status/{job_id}."""
     job_id = str(uuid.uuid4())
     SCHEDULE_JOBS[job_id] = {
         "status": "queued", "current_stage": -1, "stage_name": None,
@@ -2007,16 +2061,20 @@ def start_schedule_generation(
 
 @app.get("/schedule/generate/status/{job_id}")
 def get_schedule_generation_status(job_id: str, user: User = Depends(require_roles(*MANAGERS))):
+    """Progress of a generation job started by the caller's school."""
     job = SCHEDULE_JOBS.get(job_id)
     if not job or job.get("_school_id") != str(user.school_id):
         raise HTTPException(status_code=404, detail="Job not found")
     return {k: v for k, v in job.items() if not k.startswith("_")}
+
+
 # ---------------------------------------------------------------------------
 # Compliance flags
 # ---------------------------------------------------------------------------
 
 @app.get("/compliance-flags")
 def list_compliance_flags(user: User = Depends(require_roles(*MANAGERS))):
+    """The school's open compliance flags."""
     db = SessionLocal()
 
     try:
@@ -2135,7 +2193,7 @@ def run_compliance_check(user: User = Depends(require_roles(*MANAGERS))):
 
     except DBAPIError as error:
         raise HTTPException(status_code=500, detail=str(error))
-    
+
 
 @app.patch("/compliance-flags/{flag_id}/resolve")
 def resolve_compliance_flag(
@@ -2143,6 +2201,7 @@ def resolve_compliance_flag(
     request: Request,
     user: User = Depends(require_roles(*MANAGERS)),
 ):
+    """Mark a compliance flag as resolved."""
     db = SessionLocal()
     try:
         flag = (
@@ -2237,6 +2296,7 @@ def list_audit_logs(
     limit: int = 100,
     user: User = Depends(get_current_user),
 ):
+    """Admin only: recent audit-log entries, optionally filtered by action or entity type."""
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Not allowed")
 
