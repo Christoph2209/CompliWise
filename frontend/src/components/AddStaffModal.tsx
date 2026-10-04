@@ -175,7 +175,7 @@ export default function AddStaffModal({ schoolId, onClose, onCreated }: AddStaff
                 checked={form.can_deliver_setss}
                 onChange={(e) => update("can_deliver_setss", e.target.checked)}
               />
-              Can deliver SETSS
+              Can deliver Resource Room
             </label>
           </fieldset>
 

@@ -14,6 +14,7 @@ from dmscheduler_db import (
     StaffMember,
     StudentService,
 )
+from scheduling_core import canonical_service_type
 
 
 STUDENTS_CSV = "./data/Student_export.csv"
@@ -27,7 +28,7 @@ DEFAULT_SESSION_MINUTES = {
     "PT": 30,
     "Speech": 30,
     "Counseling": 30,
-    "SETSS": 30,
+    "Resource Room": 30,
     "Psych": 30,
 }
 
@@ -274,6 +275,7 @@ def import_staff(db, school, csv_path: Optional[PathLike] = None) -> int:
             )
             staff.can_deliver_setss = yes_no(
                 row.get("can_deliver_setss")
+                or row.get("Can Deliver Resource Room")
                 or row.get("Can Deliver SETSS")
             )
 
@@ -341,7 +343,7 @@ def import_student_services(db, school, csv_path):
                 continue
 
             for svc in services:
-                service_type = svc.get("service_type")
+                service_type = canonical_service_type(svc.get("service_type"))
                 if not service_type:
                     continue
 

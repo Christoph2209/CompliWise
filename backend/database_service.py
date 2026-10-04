@@ -91,7 +91,7 @@ def get_students(
                     "service_type": svc.service_type,
                     "minutes": svc.minutes_per_week,
                     "is_pullout": svc.is_pullout,
-                    # Which class a push-in goes into (e.g. SETSS "Math").
+                    # Which class a push-in goes into (e.g. Resource Room "Math").
                     # Without it the engine falls back to the service's
                     # default push-in subjects.
                     "subject_area": svc.subject_area,

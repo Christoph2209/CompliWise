@@ -44,7 +44,7 @@ SERVICE_DELIVERIES = ("pullout", "push_in")
 
 IEP_RELATED_SERVICES = {
     "speech": {"cert_field": "is_certified_slp", "label": "Speech/Language (SLP)", "service_type": "Speech"},
-    "setss": {"cert_field": "can_deliver_setss", "label": "SETSS / IEP Support", "service_type": "SETSS"},
+    "resource room": {"cert_field": "can_deliver_setss", "label": "Resource Room / IEP Support", "service_type": "Resource Room"},
     "enl": {"cert_field": "is_certified_enl", "label": "ENL", "service_type": "ENL"},
 }
 
@@ -184,7 +184,7 @@ def check_staff_coverage(
     flags: List[Dict[str, Any]] = []
     week_minutes = _instructional_minutes_per_week(period_config)
 
-    # ---- IEP-related services (SLP, SETSS, ENL) ----
+    # ---- IEP-related services (SLP, Resource Room, ENL) ----
     for service_key, config in IEP_RELATED_SERVICES.items():
         qualified_count = sum(1 for s in staff_members if s.get(config["cert_field"]))
 

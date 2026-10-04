@@ -488,7 +488,7 @@ def qualified_providers(service_type: str, staff_members: List[Dict[str, Any]]) 
 
         qualified = (
             (service_lower == "speech" and staff.get("is_certified_slp"))
-            or (service_lower in ("setss", "iep support") and staff.get("can_deliver_setss"))
+            or (service_lower in ("resource room", "setss", "iep support") and staff.get("can_deliver_setss"))
             or (service_lower == "enl" and staff.get("is_certified_enl"))
             or (service_lower == "counseling" and (
                 "counselor" in title or "psychologist" in title or "social worker" in title
@@ -1148,7 +1148,7 @@ def get_flex_focus_area(student):
     """
     services_text = str(student.get("iep_services") or []).lower()
 
-    if "reading" in services_text or "setss" in services_text:
+    if "reading" in services_text or "resource room" in services_text or "setss" in services_text:
         return "reading"
     if "math" in services_text:
         return "math"
@@ -1202,7 +1202,7 @@ def pick_flex_teacher(
     def names(predicate):
         return [staff_full_name(s) for s in staff_members if staff_full_name(s) and predicate(s)]
 
-    setss_qualified = names(lambda s: s.get("can_deliver_setss") or s.get("is_certified_sped"))
+    resource_room_qualified = names(lambda s: s.get("can_deliver_setss") or s.get("is_certified_sped"))
     gen_ed = names(lambda s: s.get("title") == "General Education Teacher" and is_own_grade(s))
     counselors = names(lambda s: s.get("title") in ("School Counselor", "School Psychologist", "Social Worker"))
     ict = names(lambda s: s.get("title") == "ICT Co-Teacher")
@@ -1212,10 +1212,10 @@ def pick_flex_teacher(
     )) | set(gen_ed))
 
     if focus_area in ("reading", "writing"):
-        return (best(setss_qualified) or best(paraprofessionals) or best(gen_ed)
+        return (best(resource_room_qualified) or best(paraprofessionals) or best(gen_ed)
                 or best(ict) or best(all_instructional))
     if focus_area == "math":
-        return (best(paraprofessionals) or best(gen_ed) or best(setss_qualified)
+        return (best(paraprofessionals) or best(gen_ed) or best(resource_room_qualified)
                 or best(ict) or best(all_instructional))
     if focus_area == "behavior":
         return best(counselors) or best(paraprofessionals) or best(all_instructional)
