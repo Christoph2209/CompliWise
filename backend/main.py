@@ -1,7 +1,7 @@
 """CompliWise Scheduler Engine API."""
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 import os
 import setup as setup_module
 import uuid
@@ -16,14 +16,13 @@ from import_validation import validate_staff_csv, validate_students_csv, summari
 from uuid import UUID
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 from dotenv import load_dotenv
 from auth_utils import hash_password, verify_password
-from compliance import run_all_compliance_checks, check_staff_coverage
+from compliance import run_all_compliance_checks
 from database_service import (
     DBAPIError,
     DBConfigError,

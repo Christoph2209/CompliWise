@@ -16,7 +16,6 @@ from dmscheduler_db import (
     ComplianceFlag,
     FlexGroup,
     FlexGroupStudent,
-    User,
 )
 
 logger = logging.getLogger(__name__)

@@ -92,7 +92,7 @@ def test_every_private_endpoint_needs_login():
     client = _client()
     fake = str(uuid.uuid4())
     checks = [
-        ("get", "/students"), ("put", f"/students/{fake}"), ("get", f"/students/X/schedule"),
+        ("get", "/students"), ("put", f"/students/{fake}"), ("get", "/students/X/schedule"),
         ("get", "/staff"), ("post", "/staff"), ("put", f"/staff/{fake}"),
         ("get", "/schedule"), ("get", "/preview-priority"), ("post", "/save-schedule"),
         ("post", "/reset-generated-schedules"), ("get", "/compliance-flags"),
