@@ -27,6 +27,7 @@ from typing import Iterable, Optional
 
 from dmscheduler_db import StaffMember, Student
 from import_csv_data import DEFAULT_SESSION_MINUTES, FREQ_PATTERN
+from scheduling_core import canonical_service_type
 
 # Same aliases import_csv_data.py accepts, first match wins.
 STUDENT_ID_COLUMNS = ("student_id", "id", "external_student_id")
@@ -43,6 +44,8 @@ MAX_ROWS = 20_000  # far beyond any single school; guards against huge uploads
 
 @dataclass
 class Issue:
+    """One problem found in an uploaded file."""
+
     row: Optional[int]  # spreadsheet row number (header = row 1); None = whole file
     severity: str       # "error" | "warning"
     field: Optional[str]
@@ -54,6 +57,12 @@ class Issue:
 
 @dataclass
 class FileReport:
+    """
+    Validation result for one uploaded file ("students" or "staff"): row
+    counts, how many rows are new vs. updates, and every Issue found.
+    as_dict() is what the import preview endpoint returns to the UI.
+    """
+
     file: str
     rows_read: int = 0
     new_records: int = 0
@@ -88,6 +97,7 @@ class FileReport:
 
 
 def _first(row: dict, columns: Iterable[str]) -> str:
+    """The first non-blank value among `columns` (header aliases), stripped; "" if none."""
     for column in columns:
         value = row.get(column)
         if value is not None and str(value).strip() != "":
@@ -100,6 +110,11 @@ def _has_any_column(headers: list[str], columns: Iterable[str]) -> bool:
 
 
 def _read_rows(path: Path, report: FileReport) -> tuple[list[str], list[dict]]:
+    """
+    Read the CSV into (headers, rows) with header names stripped. Encoding,
+    CSV-format and size problems are added to `report` as file-level errors
+    and return empty rows.
+    """
     try:
         with path.open("r", encoding="utf-8-sig", newline="") as f:
             reader = csv.DictReader(f)
@@ -120,6 +135,7 @@ def _read_rows(path: Path, report: FileReport) -> tuple[list[str], list[dict]]:
 
 
 def _check_required_headers(headers, report, id_columns, kind):
+    """Record an error and return False unless the file has an ID, first-name and last-name column."""
     if not headers:
         if not report.issues:
             report.add(None, "error", None, "File is empty or has no header row.")
@@ -139,6 +155,7 @@ def _check_required_headers(headers, report, id_columns, kind):
 
 
 def _check_yes_no(row, row_num, report, columns, field_name):
+    """Warn when a yes/no column holds something the importer will read as "no"."""
     raw = _first(row, columns)
     if raw.lower() not in YES_NO_VALUES:
         report.add(row_num, "warning", field_name,
@@ -146,6 +163,12 @@ def _check_yes_no(row, row_num, report, columns, field_name):
 
 
 def validate_students_csv(db, school_id, path: Path) -> FileReport:
+    """
+    Check a students CSV for this school. Errors: missing/duplicate IDs,
+    missing names, bad ENL minutes, unreadable iep_services. Warnings:
+    unrecognized grade, MTSS tier or yes/no values, and service entries
+    that will import with assumed defaults.
+    """
     report = FileReport(file="students")
     headers, rows = _read_rows(path, report)
     if not _check_required_headers(headers, report, STUDENT_ID_COLUMNS, "students"):
@@ -209,6 +232,7 @@ def validate_students_csv(db, school_id, path: Path) -> FileReport:
 
 
 def _validate_services(row, row_num, report):
+    """Check the iep_services JSON column of one student row."""
     raw = (row.get("iep_services") or "").strip()
     if not raw or raw == "[]":
         return
@@ -233,7 +257,8 @@ def _validate_services(row, row_num, report):
                        f"Service #{position} has no service_type.")
             continue
         report.services_found += 1
-        service_type = svc["service_type"]
+        # Same name mapping as the importer, so legacy "SETSS" isn't flagged.
+        service_type = canonical_service_type(svc["service_type"])
         frequency = svc.get("frequency")
         if not frequency or not FREQ_PATTERN.search(str(frequency)):
             report.add(row_num, "warning", "iep_services",
@@ -245,6 +270,11 @@ def _validate_services(row, row_num, report):
 
 
 def validate_staff_csv(db, school_id, path: Path) -> FileReport:
+    """
+    Check a staff CSV for this school. Errors: missing/duplicate IDs and
+    missing names. Warnings: unrecognized yes/no values in the certification
+    columns and invalid group sizes.
+    """
     report = FileReport(file="staff")
     headers, rows = _read_rows(path, report)
     if not _check_required_headers(headers, report, STAFF_ID_COLUMNS, "staff"):

@@ -101,16 +101,19 @@ REASON_TEXT = {
 
 
 def _overlaps(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
+    """True if [a_start, a_end) and [b_start, b_end) share any minute."""
     return a_start < b_end and b_start < a_end
 
 
 def pushin_subject_label(service_subject: str) -> str:
+    """Subject text shown on a push-in session, e.g. "ENL (push-in)"."""
     return f"{service_subject} (push-in)"
 
 
 def make_flag(student_id, flag_type, severity, title, description,
               legal_reference="School scheduling constraint",
               affected_period="weekly schedule") -> Dict[str, Any]:
+    """Build one compliance-flag dict (same shape as compliance._flag)."""
     return {
         "student_id": student_id,
         "flag_type": flag_type,
@@ -138,6 +141,11 @@ def make_entry(
     grade: Optional[str],
     is_flex_period: bool = False,
 ) -> Dict[str, Any]:
+    """
+    Build one student schedule entry: `student_id` is with `teacher` in
+    `room` from start to end on `day`. This dict is what gets saved as a
+    ScheduleEntry row.
+    """
     return {
         "student_id": student_id,
         "day_of_week": day,
@@ -170,16 +178,22 @@ class ScheduleIndex:
     """
 
     def __init__(self):
+        # (student_id, day) -> booked [start, end) intervals
         self.student_intervals: Dict[Tuple[str, str], List[Tuple[int, int]]] = {}
+        # (teacher name, day) -> booked intervals with their (subject, room) label
         self.teacher_intervals: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+        # Counters behind the daily pull-out / same-service limits
         self.pullout_intervals_by_student_day: Dict[Tuple[str, str], List[Tuple[int, int]]] = {}
         self.service_count_by_student_day: Dict[Tuple[str, str, str], int] = {}
         self.service_days_by_student: Dict[Tuple[str, str], Set[str]] = {}
+        # (student_id, block subject) -> pull-outs taken from that subject,
+        # used to spread lost instruction across subjects
         self.pullouts_by_student_subject: Dict[Tuple[str, str], int] = {}
 
     # ---------------- students ----------------
 
     def is_student_busy(self, student_id, day, start, end) -> bool:
+        """True if the student already has anything booked overlapping [start, end)."""
         return any(
             _overlaps(start, end, s, e)
             for s, e in self.student_intervals.get((student_id, day), [])
@@ -205,6 +219,7 @@ class ScheduleIndex:
     # ---------------- teachers ----------------
 
     def teacher_intervals_on(self, teacher, day) -> List[Dict[str, Any]]:
+        """Everything booked for this teacher on this day."""
         return self.teacher_intervals.get((teacher, day), [])
 
     def teacher_conflict(
@@ -239,6 +254,7 @@ class ScheduleIndex:
         return None
 
     def group_members(self, teacher, day, start, end, subject, room) -> List[Dict[str, Any]]:
+        """Students already in the teacher's group with exactly this time and label."""
         return [
             iv for iv in self.teacher_intervals_on(teacher, day)
             if iv["student_id"]
@@ -279,21 +295,26 @@ class ScheduleIndex:
     # ---------------- service limits ----------------
 
     def pullouts_on_day(self, student_id, day) -> int:
+        """Number of pull-outs the student already has on this day."""
         return len(self.pullout_intervals_by_student_day.get((student_id, day), []))
 
     def pullout_limit_reached(self, student_id, day, period_config: PeriodConfig) -> bool:
+        """True if another pull-out would exceed the configured daily cap."""
         return self.pullouts_on_day(student_id, day) >= period_config.max_pullouts_per_day
 
     def service_on_day(self, student_id, service_type, day) -> bool:
+        """True if the student already has a session of this service on this day."""
         return self.service_count_by_student_day.get((student_id, service_type, day), 0) > 0
 
     def same_service_limit_reached(self, student_id, service_type, day) -> bool:
+        """True if the student already has the daily max of this service."""
         limit = max_same_service_per_day(service_type)
         if limit <= 0:
             return False
         return self.service_count_by_student_day.get((student_id, service_type, day), 0) >= limit
 
     def violates_min_gap(self, student_id, day, start, end, period_config: PeriodConfig) -> bool:
+        """True if [start, end) is closer than min_gap_minutes to another of the student's pull-outs."""
         min_gap = period_config.min_gap_minutes
         if min_gap <= 0:
             return False
@@ -303,6 +324,7 @@ class ScheduleIndex:
         return False
 
     def violates_min_day_gap(self, student_id, service_type, day) -> bool:
+        """True if this service is already on a cycle day within MIN_DAYS_BETWEEN_SAME_SERVICE."""
         if MIN_DAYS_BETWEEN_SAME_SERVICE <= 0:
             return False
         scheduled_days = self.service_days_by_student.get((student_id, service_type), set())
@@ -315,6 +337,7 @@ class ScheduleIndex:
     # ---------------- writes ----------------
 
     def add_entry(self, entry: Dict[str, Any]):
+        """Record a placed entry so later placements see the student and teacher as busy."""
         student_id = entry["student_id"]
         day = entry["day_of_week"]
         start, end = int(entry["start_minute"]), int(entry["end_minute"])
@@ -356,6 +379,7 @@ class ScheduleIndex:
 # ===============================================================
 
 def get_homerooms(students: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """Group students by homeroom. Students with no homeroom are left out."""
     homerooms: Dict[str, List[Dict[str, Any]]] = {}
     for student in students:
         homeroom = str(student.get("homeroom") or "").strip()
@@ -504,6 +528,7 @@ def qualified_providers(service_type: str, staff_members: List[Dict[str, Any]]) 
 
 
 def _slot_starts(block: Block, session_len: int, step: int) -> List[int]:
+    """Start minutes a session of session_len can use inside the block, every `step` minutes."""
     starts = set(range(block.start, block.end - session_len + 1, step))
     starts.add(block.end - session_len)   # always allow ending exactly at the block's end
     return sorted(s for s in starts if s >= block.start)
@@ -523,6 +548,13 @@ def _score_candidate(
     provider: str,
     label: Tuple[str, str],
 ) -> Tuple[int, List[str]]:
+    """
+    Score one candidate time for a service session (higher is better) and
+    say why. Pull-outs start from the block's pullout_score, then lose
+    points for pulling from the same subject again, for other pull-outs
+    that day and for splitting a block mid-way; joining an existing group
+    gains points (more if it is the same grade).
+    """
     why: List[str] = []
 
     if delivery == DELIVERY_PULLOUT:
@@ -673,6 +705,7 @@ def rank_slots_for_service(
 
 
 def _describe_reasons(reasons: Counter) -> str:
+    """The top three reasons a session couldn't be placed, in plain language."""
     top = [REASON_TEXT.get(code, code) for code, _ in reasons.most_common(3)]
     return "; ".join(top) if top else "no candidate times were found"
 
@@ -706,6 +739,17 @@ def place_mandated_services(
     period_config: PeriodConfig,
     schedule_index: ScheduleIndex,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Pipeline step 1: place every mandated service session (IEP, ENL, ...).
+
+    Each (student, service) request is split into sessions and placed
+    hardest-first (fewest legal start times per session). For each session
+    the student's current provider is tried first so they keep the same
+    person all week, then the least-loaded qualified provider. Anything
+    that can't be placed becomes a critical flag naming the main blockers.
+
+    Returns (entries, flags, per-request report).
+    """
     entries: List[Dict[str, Any]] = []
     flags: List[Dict[str, Any]] = []
     report: List[Dict[str, Any]] = []
@@ -879,6 +923,7 @@ def get_specials_teachers(
     staff_members: List[Dict[str, Any]],
     period_config: PeriodConfig,
 ) -> Dict[str, List[str]]:
+    """Specials subject ("PE", "Music", ...) -> names of staff who teach it."""
     by_subject: Dict[str, List[str]] = {}
     for staff in staff_members:
         subject = staff.get("specials_subject") or period_config.specials_titles.get(
@@ -979,7 +1024,9 @@ def build_specials_schedule(
             "minutes": Counter(), "unstaffed": 0,
         }
 
+    # Helpers below share this function's plans / teacher-load state.
     def book(homeroom, info, day, block, teacher, label):
+        """Put the whole homeroom with `teacher` for the free parts of the block."""
         for student in info["roster"]:
             sid = student["student_id"]
             for start, end in schedule_index.free_pieces(sid, day, block.start, block.end):
@@ -993,11 +1040,13 @@ def build_specials_schedule(
                 schedule_index.add_entry(entry)
 
     def record(plan, subject, block):
+        """Count the block toward the homeroom's minutes of `subject`."""
         if subject in plan["queue"]:
             plan["queue"].remove(subject)
         plan["minutes"][subject] += block.length
 
     def find_merge_host(subject, homeroom, day, block, size):
+        """Another homeroom's class of this subject at the same time with room for `size` more."""
         locked = homeroom_subject_teacher.get((homeroom, subject))
         for name in ([locked] if locked else teachers_by_subject.get(subject, [])):
             hosts = [
@@ -1018,6 +1067,7 @@ def build_specials_schedule(
         return None
 
     def try_dedicated(homeroom, plan, info, day, block, subject):
+        """Give the homeroom its own Specials teacher for the block, if one is free."""
         locked = homeroom_subject_teacher.get((homeroom, subject))
         candidates = [locked] if locked else sorted(
             teachers_by_subject.get(subject, []), key=lambda n: teacher_load[n]
@@ -1033,6 +1083,7 @@ def build_specials_schedule(
         return False
 
     def try_merge(homeroom, plan, info, day, block, subject):
+        """Fall back to combining the homeroom with another class (flagged as info)."""
         host = find_merge_host(subject, homeroom, day, block, len(info["roster"]))
         if not host:
             return False
@@ -1366,6 +1417,12 @@ def fill_remaining_blocks(
     period_config: PeriodConfig,
     schedule_index: ScheduleIndex,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Pipeline step 4: fill every minute of each student's day not already
+    booked, following the grade's master schedule (ELA with the homeroom
+    teacher, Lunch, ...). Flags students with no homeroom, and homerooms
+    whose students sit with no adult because the teacher is booked elsewhere.
+    """
     entries: List[Dict[str, Any]] = []
     flags: List[Dict[str, Any]] = []
     unsupervised_minutes: Counter = Counter()
@@ -1445,6 +1502,7 @@ def make_staff_entry(
     student_ids: List[str],
     is_flex_period: bool = False,
 ) -> Dict[str, Any]:
+    """Build one staff schedule row (saved as a StaffScheduleEntry)."""
     return {
         "teacher": teacher,
         "day_of_week": day,
@@ -1490,6 +1548,7 @@ def build_staff_schedule_entries(
     rows: List[Dict[str, Any]] = []
 
     def close(teacher, day, session):
+        """Turn a run of overlapping intervals with one label into one staff row."""
         first = session[0]
         student_ids = list(dict.fromkeys(iv["student_id"] for iv in session if iv["student_id"]))
         grades = Counter(iv["grade"] for iv in session if iv["grade"])
@@ -1573,6 +1632,11 @@ def build_staff_schedule_entries(
 # ===============================================================
 
 def priority_score(student: Dict[str, Any]) -> int:
+    """
+    Scheduling priority (higher goes first): IEP, then number of IEP
+    services, ENL minutes and MTSS tier. Used as a tiebreaker when
+    ordering service requests.
+    """
     score = 0
     if student.get("has_iep"):
         score += 10000
@@ -1584,40 +1648,6 @@ def priority_score(student: Dict[str, Any]) -> int:
     elif mtss_tier == "tier_2":
         score += 1000
     return score
-
-
-def add_to_staff_schedule(
-    staff_schedule,
-    teacher,
-    day,
-    period,
-    student_id,
-    student_name,
-    subject,
-    service_type,
-    is_pullout,
-    time_range="",
-):
-    if not teacher:
-        return
-
-    blocks = staff_schedule.setdefault(teacher, {}).setdefault(day, {}).setdefault(period, [])
-
-    block = next(
-        (b for b in blocks if b["subject"] == subject and b["service_type"] == service_type),
-        None,
-    )
-    if block is None:
-        block = {
-            "subject": subject,
-            "service_type": service_type,
-            "is_pullout": is_pullout,
-            "time_range": time_range,
-            "students": [],
-        }
-        blocks.append(block)
-
-    block["students"].append({"student_id": student_id, "student_name": student_name})
 
 
 # ===============================================================
@@ -1632,8 +1662,16 @@ def schedule_iep_services_first(
     progress_callback=None,  # optional callable(stage_index: int, message: str | None = None)
 ) -> Dict[str, Any]:
     """
-    Main scheduler. See scheduling_core.py for PeriodConfig/constants
-    and compliance.py for post-build validation.
+    Build a full schedule for the school; this is what the API calls.
+
+    Runs the pipeline described at the top of this file and returns a
+    dict with schedule_entries (per student), staff_schedule_entries (per
+    teacher), compliance_flags, flex_groups, flex_group_students, the
+    service_placement_report and a summary of counts. Nothing is saved
+    here; main.py stores the result through database_service.
+
+    period_config defaults to the built-in master schedule. progress_callback,
+    if given, is called as each pipeline stage starts (for the progress bar).
     """
     staff_members = staff_members or []
     period_config = period_config or PeriodConfig()
@@ -1757,20 +1795,7 @@ def schedule_iep_services_first(
 
     all_entries.sort(key=lambda e: (e["student_id"], DAYS.index(e["day_of_week"]), e["start_minute"]))
 
-    staff_schedule: Dict[str, Any] = {}
-    for entry in all_entries:
-        add_to_staff_schedule(
-            staff_schedule=staff_schedule,
-            teacher=entry["teacher"],
-            day=entry["day_of_week"],
-            period=entry["period"],
-            student_id=entry["student_id"],
-            student_name=full_student_name(students_by_id.get(entry["student_id"], {})),
-            subject=entry["subject"],
-            service_type=entry["service_type"],
-            is_pullout=entry["is_pullout"],
-            time_range=entry["time_range"],
-        )
+    teachers_scheduled = {e["teacher"] for e in all_entries if e["teacher"]}
 
     # ---------------------------------------------------------
     # 5. Staff schedules (the rows that get saved per teacher)
@@ -1873,7 +1898,6 @@ def schedule_iep_services_first(
         "compliance_flags": compliance_flags,
         "flex_groups": flex_groups,
         "flex_group_students": student_flex_group_rows,
-        "staff_schedule": staff_schedule,
         "staff_schedule_entries": staff_schedule_entries,
         "service_placement_report": placement_report,
         "period_config": period_config.to_dict(),
@@ -1883,7 +1907,7 @@ def schedule_iep_services_first(
             "compliance_flags_created": len(compliance_flags),
             "flex_groups_created": len(flex_groups),
             "flex_group_students_created": len(student_flex_group_rows),
-            "staff_members_scheduled": len(staff_schedule),
+            "staff_members_scheduled": len(teachers_scheduled),
             "staff_schedule_entries_created": len(staff_schedule_entries),
             "service_sessions_short": sessions_short,
         },
