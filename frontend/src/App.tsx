@@ -9,6 +9,7 @@ import CompliancePage from "./pages/Compliance";
 import AuditLogPage from "./pages/AuditLog";
 import DashboardRouter from "./pages/DashboardRouter";
 import FlexGroups from "./pages/FlexGroups";
+import ImportData from "./pages/ImportData";
 import Login from "./pages/LoginPage";
 import SetupWizard from "./pages/SetupWizard";
 import { AuthProvider } from "./context/authContext";
@@ -74,6 +75,14 @@ function App() {
                 }
               />
               <Route path="/flex_groups" element={<FlexGroups />} />
+              <Route
+                path="/import"
+                element={
+                  <RoleRoute allowed={["admin"]}>
+                    <ImportData />
+                  </RoleRoute>
+                }
+              />
             </Route>
           </Route>
         </Routes>

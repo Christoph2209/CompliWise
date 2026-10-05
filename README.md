@@ -114,14 +114,12 @@ http://127.0.0.1:8000/docs
 
 ### 1. Load data
 
-Import the following before generating a schedule:
+Import students and staff from CSV in the setup wizard or, for an admin, any time afterwards from the **Import Students** page. Each file is checked row by row first; a file with errors is refused as a whole, and the report lists every problem.
 
-- Students
-- Staff members
-- Courses
-- Service requirements
-- Availability
-- Scheduling rules
+- **Students:** ID, name, grade, homeroom, IEP status, ENL level/minutes, MTSS tier, and IEP services (`iep_services`, a JSON list).
+- **Staff:** ID, name, title, grade, homeroom, and certifications (SPED, ENL, SLP, Resource Room).
+
+> IEP minutes imported from CSV are placeholders, since exports only carry a frequency such as "2x/week". Each imported service is marked **NEEDS VERIFICATION**; check them against the IEP paperwork.
 
 ### 2. Generate a schedule preview
 
@@ -161,16 +159,23 @@ This commits the generated schedule to the database.
 
 ## Scheduling Algorithm
 
-**Current version:** Greedy Constraint Scheduler
+**Current version:** Greedy constraint scheduler
 
-Students are ranked by priority, and required services are placed first in that order:
+Each grade follows its own master schedule (for example 2nd grade: Math 8:20–9:20, ELA 9:20–10:30, …). Times are minutes since midnight, and every booking is a start–end interval inside one of those blocks. The school runs on a rotating A–E day cycle.
 
-1. IEP students
-2. Students with higher service minutes
-3. Students with more required providers
-4. ENL requirements
-5. MTSS Tier 3
-6. MTSS Tier 2
+Steps:
+
+1. **Mandated services** (IEP, ENL, related services) are placed first, hardest-to-place first (fewest legal times). Student priority breaks ties: IEP, number of services, ENL minutes, then MTSS tier. Each possible time is scored:
+   - Pull-outs prefer intervention time (I-Block) and avoid core ELA/Math, and are spread across subjects.
+   - Push-ins only go into the subjects allowed for that service.
+   - A student keeps the same provider all week when possible.
+   - ENL groups prefer students from the same homeroom. Where that would leave any student short of a session, the preference is dropped and those students are grouped across homerooms instead.
+   - Once the groups are set, an ENL pull-out group whose students all share a homeroom (or a single student) becomes a push-in, as long as it falls in a subject that allows ENL push-in.
+2. **Specials** — each homeroom gets its PE / Music / Art teachers.
+3. **Flex / WIN groups** — built inside each grade's FLEX block.
+4. **Everything else** — the rest of each student's day is filled from the master schedule.
+5. **Staff schedules** — one row per teacher per class, including prep and lunch.
+6. **Compliance checks** run on the result.
 
 ### Rules enforced
 

@@ -34,22 +34,22 @@ false,Music Teacher,false,Room 601,Carpenter,false,Music Teacher,[],,false,false
 false,Music,false,Room 602,Grohl,false,Music Teacher,[],,false,false,Dave,d.grohl@ps101.edu,active,69fc969b098a9219c1d5a869,2026-05-07T13:41:47.461000,2026-05-07T13:41:47.461000,69fa0215ff3c784069cea5aa,gauravmehra1984@gmail.com,false
 false,Art,false,Room 603,Goh,false,Art Teacher,[],,false,false,Van,v.g@ps101.edu,active,69fc969b098a9219c1d5a869,2026-05-07T13:41:47.461000,2026-05-07T13:41:47.461000,69fa0215ff3c784069cea5aa,gauravmehra1984@gmail.com,false
 false,Physical Education Teacher,false,Gymnasium,King,false,Physical Education Teacher,[],,false,false,Brody,c.mcgo@ps101.edu,active,69fc969b098a9219c1d5a868,2026-05-07T13:41:47.461000,2026-05-07T13:41:47.461000,69fa0215ff3c784069cea5aa,gauravmehra1984@gmail.com,false
-false,Kindergarten,false,Room K-3,Bennett,false,General Education Teacher,"[""Childhood Ed K-6""]",GE-031,false,false,Olivia,o.bennett@ps101.edu,active,,,,,,false
-false,Grade 1,false,Room 101C,Delgado,false,General Education Teacher,"[""Childhood Ed K-6""]",GE-032,false,false,Marcus,m.delgado@ps101.edu,active,,,,,,false
-false,Grade 2,false,Room 201C,Fitzgerald,false,General Education Teacher,"[""Childhood Ed K-6""]",GE-033,false,false,Hannah,h.fitzgerald@ps101.edu,active,,,,,,false
-false,Grade 3,false,Room 301C,Carter,false,General Education Teacher,"[""Childhood Ed K-6""]",GE-034,false,false,Jamal,j.carter@ps101.edu,active,,,,,,false
-false,Grade 4,false,Room 401C,Raman,false,General Education Teacher,"[""Childhood Ed K-6""]",GE-035,false,false,Priya,p.raman@ps101.edu,active,,,,,,false
-false,Grade 5,false,Room 501C,Sullivan,false,General Education Teacher,"[""Childhood Ed K-6""]",GE-036,false,false,Ethan,e.sullivan@ps101.edu,active,,,,,,false
-true,Grade 5 ICT,false,Room 501B,Mendez,false,ICT Co-Teacher,"[""Special Education""]",ICT-037,true,false,Laura,l.mendez@ps101.edu,active,,,,,,false
-false,,false,Room 105,Holloway,false,Speech-Language Pathologist,"[""SLP"",""CCC-SLP""]",SLP-038,false,true,Grace,g.holloway@ps101.edu,active,,,,,,false
-false,,false,Room 106,Haddad,false,Speech-Language Pathologist,"[""SLP"",""CCC-SLP""]",SLP-039,false,true,Omar,o.haddad@ps101.edu,active,,,,,,false
-false,,false,Room 107,Castillo,false,Occupational Therapist,"[""OT License""]",OT-040,false,false,Megan,m.castillo@ps101.edu,active,,,,,,false
-false,,false,Room 207,Barnes,true,SETSS Provider,"[""Special Education""]",SED-041,true,false,Tyrone,t.barnes@ps101.edu,active,,,,,,false
-false,,false,Room 208,Petrova,true,SETSS Provider,"[""Special Education""]",SED-042,true,false,Elena,e.petrova@ps101.edu,active,,,,,,false
-false,,false,Room 204,Ortiz,false,School Counselor,"[""School Counseling""]",CSL-043,false,false,Daniel,d.ortiz@ps101.edu,active,,,,,,false
-false,,false,Room 108,Lindgren,false,Speech-Language Pathologist,"[""SLP"",""CCC-SLP""]",SLP-044,false,true,Rebecca,r.lindgren@ps101.edu,active,,,,,,false
-false,,false,Room 109,Whitfield,false,Occupational Therapist,"[""OT License""]",OT-045,false,false,Andre,a.whitfield@ps101.edu,active,,,,,,false
-false,,false,Room 113,Marchetti,false,Physical Therapist,"[""PT License""]",PT-046,false,false,Sofia,s.marchetti@ps101.edu,active,,,,,,false
-false,,false,Room 209,Asante,true,SETSS Provider,"[""Special Education""]",SED-047,true,false,Kwame,k.asante@ps101.edu,active,,,,,,false
-false,Bilingual (Spanish) SETSS,false,Room 210,Romero,true,SETSS Provider,"[""Special Education"",""Bilingual Extension""]",SED-048,true,false,Isabel,i.romero@ps101.edu,active,,,,,,false
-false,,false,Room 211,Brennan,false,School Counselor,"[""School Counseling""]",CSL-049,false,false,Natalie,n.brennan@ps101.edu,active,,,,,,false
+false,Kindergarten,false,Room K-3,Bennett,false,General Education Teacher,"[""Childhood Ed K-6""]",GE-031,false,false,Olivia,o.bennett@ps101.edu,active,69fc969b098a9219c1d5a868,,,,,false
+false,Grade 1,false,Room 101C,Delgado,false,General Education Teacher,"[""Childhood Ed K-6""]",GE-032,false,false,Marcus,m.delgado@ps101.edu,active,69fc969b098a9219c1d5a868,,,,,false
+false,Grade 2,false,Room 201C,Fitzgerald,false,General Education Teacher,"[""Childhood Ed K-6""]",GE-033,false,false,Hannah,h.fitzgerald@ps101.edu,active,69fc969b098a9219c1d5a868,,,,,false
+false,Grade 3,false,Room 301C,Carter,false,General Education Teacher,"[""Childhood Ed K-6""]",GE-034,false,false,Jamal,j.carter@ps101.edu,active,69fc969b098a9219c1d5a868,,,,,false
+false,Grade 4,false,Room 401C,Raman,false,General Education Teacher,"[""Childhood Ed K-6""]",GE-035,false,false,Priya,p.raman@ps101.edu,active,69fc969b098a9219c1d5a868,,,,,false
+false,Grade 5,false,Room 501C,Sullivan,false,General Education Teacher,"[""Childhood Ed K-6""]",GE-036,false,false,Ethan,e.sullivan@ps101.edu,active,69fc969b098a9219c1d5a868,,,,,false
+true,Grade 5 ICT,false,Room 501B,Mendez,false,ICT Co-Teacher,"[""Special Education""]",ICT-037,true,false,Laura,l.mendez@ps101.edu,active,69fc969b098a9219c1d5a868,,,,,false
+false,,false,Room 105,Holloway,false,Speech-Language Pathologist,"[""SLP"",""CCC-SLP""]",SLP-038,false,true,Grace,g.holloway@ps101.edu,active,69fc969b098a9219c1d5a868,,,,,false
+false,,false,Room 106,Haddad,false,Speech-Language Pathologist,"[""SLP"",""CCC-SLP""]",SLP-039,false,true,Omar,o.haddad@ps101.edu,active,69fc969b098a9219c1d5a868,,,,,false
+false,,false,Room 107,Castillo,false,Occupational Therapist,"[""OT License""]",OT-040,false,false,Megan,m.castillo@ps101.edu,active,69fc969b098a9219c1d5a868,,,,,false
+false,,false,Room 207,Barnes,true,SETSS Provider,"[""Special Education""]",SED-041,true,false,Tyrone,t.barnes@ps101.edu,active,69fc969b098a9219c1d5a868,,,,,false
+false,,false,Room 208,Petrova,true,SETSS Provider,"[""Special Education""]",SED-042,true,false,Elena,e.petrova@ps101.edu,active,69fc969b098a9219c1d5a868,,,,,false
+false,,false,Room 204,Ortiz,false,School Counselor,"[""School Counseling""]",CSL-043,false,false,Daniel,d.ortiz@ps101.edu,active,69fc969b098a9219c1d5a868,,,,,false
+false,,false,Room 108,Lindgren,false,Speech-Language Pathologist,"[""SLP"",""CCC-SLP""]",SLP-044,false,true,Rebecca,r.lindgren@ps101.edu,active,69fc969b098a9219c1d5a868,,,,,false
+false,,false,Room 109,Whitfield,false,Occupational Therapist,"[""OT License""]",OT-045,false,false,Andre,a.whitfield@ps101.edu,active,69fc969b098a9219c1d5a868,,,,,false
+false,,false,Room 113,Marchetti,false,Physical Therapist,"[""PT License""]",PT-046,false,false,Sofia,s.marchetti@ps101.edu,active,69fc969b098a9219c1d5a868,,,,,false
+false,,false,Room 209,Asante,true,SETSS Provider,"[""Special Education""]",SED-047,true,false,Kwame,k.asante@ps101.edu,active,69fc969b098a9219c1d5a868,,,,,false
+false,Bilingual (Spanish) SETSS,false,Room 210,Romero,true,SETSS Provider,"[""Special Education"",""Bilingual Extension""]",SED-048,true,false,Isabel,i.romero@ps101.edu,active,69fc969b098a9219c1d5a868,,,,,false
+false,,false,Room 211,Brennan,false,School Counselor,"[""School Counseling""]",CSL-049,false,false,Natalie,n.brennan@ps101.edu,active,69fc969b098a9219c1d5a868,,,,,false

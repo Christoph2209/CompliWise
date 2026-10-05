@@ -1086,7 +1086,15 @@ def my_schedule(user: User = Depends(get_current_user), db: Session = Depends(ge
 # ---------------------------------------------------------------------------
 
 @app.get("/schedule")
-def list_schedule_entries(run_id: str | None = None):
+def list_schedule_entries(run_id: str | None = None, user: User = Depends(require_roles(*ALL_STAFF))):
+    """
+    Admins/principals get the whole school's entries. Teachers and aides
+    get the entries they deliver, plus the pull-outs and push-ins (ENL,
+    IEP and other services delivered by someone else) of students they
+    teach in the same run, so they can see when a student leaves their
+    class, or a provider joins it, and why. Other students' schedules
+    stay hidden from them.
+    """
     db = SessionLocal()
 
     try:
@@ -1097,7 +1105,27 @@ def list_schedule_entries(run_id: str | None = None):
 
         )
         if run_id:
-            query = query.filter(ScheduleEntry.run_id == run_id)
+            query = query.filter(ScheduleEntry.run_id == _parse_uuid(run_id, "Schedule run"))
+        if user.role not in MANAGERS:
+            if not user.staff_id:
+                return []
+            # "Students I teach" = students with one of my entries in the same run.
+            mine = aliased(ScheduleEntry)
+            my_student_in_run = exists().where(
+                mine.run_id == ScheduleEntry.run_id,
+                mine.student_id == ScheduleEntry.student_id,
+                mine.staff_id == user.staff_id,
+            )
+            # Older rows have no `delivery`; is_pullout is the fallback.
+            is_pullout = or_(
+                ScheduleEntry.delivery == "pullout",
+                and_(ScheduleEntry.delivery.is_(None), ScheduleEntry.is_pullout.is_(True)),
+            )
+            is_service = or_(is_pullout, ScheduleEntry.delivery == "push_in")
+            query = query.filter(or_(
+                ScheduleEntry.staff_id == user.staff_id,
+                and_(is_service, my_student_in_run),
+            ))
 
         results = query.all()
 

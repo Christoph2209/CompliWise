@@ -128,6 +128,31 @@
   color: var(--text-h);
 }
 
+/* DAY TABS */
+.day-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.day-tabs button {
+  flex: 1;
+  background: none;
+  border: none;
+  padding: 8px 6px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text);
+  border-bottom: 2px solid transparent;
+  font-family: var(--font-body);
+}
+
+.day-tabs button.active {
+  color: var(--green-700);
+  border-bottom-color: var(--green-600);
+  font-weight: 700;
+}
+
 /* ALERTS */
 .alert-item {
   padding: 12px 14px;
@@ -192,6 +217,12 @@
 .action-btn:hover {
   background: var(--green-400);
   color: var(--green-700);
+}
+
+.action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--green-100);
 }
 
 .schedule-table-container {
