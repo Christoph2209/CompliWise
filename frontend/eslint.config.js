@@ -20,6 +20,12 @@ export default defineConfig([
     },
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',
+      // `const { id: _id, ...rest } = x` is how we drop a field before sending it.
+      '@typescript-eslint/no-unused-vars': ['error', { ignoreRestSiblings: true }],
+      // Flags the load-on-mount pattern (`useEffect(() => { load() }, [])`)
+      // used across the app. It is a performance hint, not a bug, so keep
+      // it visible as a warning without failing CI.
+      'react-hooks/set-state-in-effect': 'warn',
     },
   },
 ])

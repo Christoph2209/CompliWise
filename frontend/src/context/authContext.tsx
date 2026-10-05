@@ -66,6 +66,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
+// Kept next to the provider it reads; only affects dev hot reload.
+// eslint-disable-next-line react-refresh/only-export-components
 export function useAuth() {
   const context = useContext(AuthContext);
   if (!context) {

@@ -214,12 +214,15 @@ def test_schedule_generation_stays_inside_one_school():
     assert admin_b.get(f"/schedule-runs/{runs_a[0]['id']}").status_code == 404
     assert admin_b.get("/schedule").json() == []
 
-    # A teacher sees their own entries plus the pull-outs of students they
-    # teach (delivered by ENL/IEP providers), and nothing else.
+    # A teacher sees their own entries plus the pull-outs and push-ins of
+    # students they teach (delivered by ENL/IEP providers), and nothing else.
     all_entries = admin_a.get("/schedule").json()
 
     def is_pullout(e):
         return e["delivery"] == "pullout" or (e["delivery"] is None and e["is_pullout"])
+
+    def is_service(e):
+        return is_pullout(e) or e["delivery"] == "push_in"
 
     pullout = next(
         p for p in all_entries
@@ -243,7 +246,7 @@ def test_schedule_generation_stays_inside_one_school():
     my_students = {e["student_id"] for e in mine if e["staff_id"] == some_staff_id}
     assert pullout["id"] in {e["id"] for e in mine}
     assert all(
-        e["staff_id"] == some_staff_id or (is_pullout(e) and e["student_id"] in my_students)
+        e["staff_id"] == some_staff_id or (is_service(e) and e["student_id"] in my_students)
         for e in mine
     )
     assert len(mine) < len(all_entries)
