@@ -47,7 +47,7 @@ export default function StaffEditModal({ staff, onClose, onSaved }: StaffEditMod
       const updated = await updateStaff(staff.id, form);
       onSaved(updated);
       onClose();
-    } catch (err) {
+    } catch {
       setError("Failed to save changes. Please try again.");
     } finally {
       setSaving(false);

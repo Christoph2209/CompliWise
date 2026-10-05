@@ -1,0 +1,37 @@
+# HTTPS entry point for docker-compose.prod.yml.
+#
+# SITE_ADDRESS  hostname or IP staff use, e.g. compliwise.myschool.org
+# CADDY_TLS     "internal" (default): certificate from Caddy's own CA, for a
+#               server only reachable on the school network. Staff devices
+#               must trust that CA once (see DEPLOY.md).
+#               An email address: a free Let's Encrypt certificate. Needs a
+#               real DNS name pointing at this server and ports 80/443 open
+#               to the internet.
+
+{$SITE_ADDRESS} {
+	tls {$CADDY_TLS}
+
+	encode gzip
+
+	# The API's interactive docs aren't needed in production.
+	@apidocs path /api/docs* /api/redoc* /api/openapi.json
+	handle @apidocs {
+		respond 404
+	}
+
+	# /api/students -> backend:8000/students
+	handle_path /api/* {
+		reverse_proxy backend:8000
+	}
+
+	handle {
+		reverse_proxy frontend:80
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy same-origin
+		-Server
+	}
+}
