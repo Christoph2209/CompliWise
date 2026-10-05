@@ -33,8 +33,10 @@ from uuid import UUID
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import and_, exists, func, or_
+from sqlalchemy import String, and_, cast, exists, func, or_
 from sqlalchemy.orm import Session, aliased
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -89,6 +91,9 @@ app.add_middleware(
     same_site="lax",
     https_only=os.getenv("COOKIE_SECURE", "false").lower() == "true",
 )
+
+# Schedule responses are megabytes of repetitive JSON; gzip cuts them ~15x.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.add_middleware(
     CORSMiddleware,
@@ -1401,24 +1406,61 @@ def update_staff(
 @app.get("/schedule")
 def list_schedule_entries(run_id: str | None = None, user: User = Depends(require_roles(*ALL_STAFF))):
     """
+    Student schedule entries for one run: `run_id`, or the school's latest
+    full run when omitted (same default as /staff-schedule).
+
     Admins/principals get the whole school's entries. Teachers and aides
     get the entries they deliver, plus the pull-outs and push-ins (ENL,
     IEP and other services delivered by someone else) of students they
     teach in the same run, so they can see when a student leaves their
     class, or a provider joins it, and why. Other students' schedules
     stay hidden from them.
+
+    A run is thousands of rows, so this selects only the columns it
+    returns (ids cast to text in SQL) and hands back ready-made JSON,
+    skipping ORM objects and FastAPI's generic encoder.
     """
     db = SessionLocal()
 
     try:
+        if run_id:
+            run_uuid = _parse_uuid(run_id, "Schedule run")
+        else:
+            run = _latest_full_run(db, user.school_id)
+            if not run:
+                return []
+            run_uuid = run.id
+
         query = (
-            db.query(ScheduleEntry, Student, StaffMember)
+            db.query(
+                cast(ScheduleEntry.id, String),
+                cast(ScheduleEntry.run_id, String),
+                cast(Student.id, String),
+                Student.first_name,
+                Student.last_name,
+                Student.grade,
+                cast(StaffMember.id, String),
+                StaffMember.first_name,
+                StaffMember.last_name,
+                ScheduleEntry.teacher_name,
+                ScheduleEntry.day_of_week,
+                ScheduleEntry.period,
+                ScheduleEntry.period_label,
+                ScheduleEntry.subject,
+                ScheduleEntry.service_type,
+                ScheduleEntry.is_pullout,
+                ScheduleEntry.is_flex_period,
+                ScheduleEntry.start_minute,
+                ScheduleEntry.end_minute,
+                ScheduleEntry.delivery,
+                ScheduleEntry.block_subject,
+                ScheduleEntry.room,
+            )
             .join(Student, ScheduleEntry.student_id == Student.id)
             .outerjoin(StaffMember, ScheduleEntry.staff_id == StaffMember.id)
             .filter(ScheduleEntry.school_id == user.school_id)
+            .filter(ScheduleEntry.run_id == run_uuid)
         )
-        if run_id:
-            query = query.filter(ScheduleEntry.run_id == _parse_uuid(run_id, "Schedule run"))
         if user.role not in MANAGERS:
             if not user.staff_id:
                 return []
@@ -1440,28 +1482,41 @@ def list_schedule_entries(run_id: str | None = None, user: User = Depends(requir
                 and_(is_service, my_student_in_run),
             ))
 
-        results = query.all()
-
-        return [
+        rows = [
             {
-                "id": str(entry.id),
-                "run_id": str(entry.run_id),
-                "student_id": str(student.id),
-                "student_name": f"{student.first_name} {student.last_name}",
-                "grade": student.grade,
-                "staff_id": str(staff.id) if staff else None,
-                "staff_name": (f"{staff.first_name} {staff.last_name}" if staff else entry.teacher_name),
-                "day_of_week": entry.day_of_week,
-                "period": entry.period,
-                "period_label": entry.period_label,
-                "subject": entry.subject,
-                "service_type": entry.service_type,
-                "is_pullout": entry.is_pullout,
-                "is_flex_period": entry.is_flex_period,
-                **_entry_time_fields(entry),
+                "id": entry_id,
+                "run_id": entry_run_id,
+                "student_id": student_id,
+                "student_name": f"{student_first} {student_last}",
+                "grade": grade,
+                "staff_id": staff_id,
+                "staff_name": f"{staff_first} {staff_last}" if staff_id else teacher_name,
+                "day_of_week": day_of_week,
+                "period": period,
+                "period_label": period_label,
+                "subject": subject,
+                "service_type": service_type,
+                "is_pullout": is_pullout_value,
+                "is_flex_period": is_flex_period,
+                # Same fields as _entry_time_fields(), from the selected columns.
+                "start_minute": start_minute,
+                "end_minute": end_minute,
+                "time_range": (
+                    format_range(start_minute, end_minute)
+                    if start_minute is not None and end_minute is not None else None
+                ),
+                "delivery": delivery,
+                "block_subject": block_subject,
+                "room": room,
             }
-            for entry, student, staff in results
+            for (
+                entry_id, entry_run_id, student_id, student_first, student_last, grade,
+                staff_id, staff_first, staff_last, teacher_name, day_of_week, period,
+                period_label, subject, service_type, is_pullout_value, is_flex_period,
+                start_minute, end_minute, delivery, block_subject, room,
+            ) in query.all()
         ]
+        return JSONResponse(rows)
     finally:
         db.close()
 

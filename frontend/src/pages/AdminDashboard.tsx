@@ -13,7 +13,7 @@ import "../components/Dashboard.css";
 export default function Dashboard() {
   const [students, setStudents] = useState<any[]>([]);
   const [staff, setStaff] = useState<any[]>([]);
-  const [schedule, setSchedule] = useState<any[]>([]);
+  const [scheduleEntryCount, setScheduleEntryCount] = useState(0);
   const [flags, setFlags] = useState<any[]>([]);
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -41,7 +41,7 @@ export default function Dashboard() {
     const data = await loadDashboard(force);
     setStudents(data.students);
     setStaff(data.staff);
-    setSchedule(data.schedule);
+    setScheduleEntryCount(data.scheduleEntryCount);
     setFlags(data.flags);
   }
 
@@ -128,7 +128,7 @@ export default function Dashboard() {
         </div>
         <div className="kpi-card">
           <div className="kpi-label">Schedule Entries</div>
-          <div className="kpi-value">{schedule.length}</div>
+          <div className="kpi-value">{scheduleEntryCount}</div>
         </div>
         <div className="kpi-card alert">
           <div className="kpi-label">Critical Issues</div>
