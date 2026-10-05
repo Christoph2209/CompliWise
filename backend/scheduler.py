@@ -62,7 +62,7 @@ from scheduling_core import (
     staff_full_name,
     get_student_services,
     max_same_service_per_day,
-    session_length_for_service,
+    service_session_plan,
     normalize_grade,
     format_range,
     MIN_DAYS_BETWEEN_SAME_SERVICE,
@@ -820,8 +820,7 @@ def place_mandated_services(
         sid = student["student_id"]
         grade = student_grade[sid]
         for service in get_student_services(student):
-            session_len = session_length_for_service(service["service_type"])
-            sessions_needed = max(1, math.ceil(service["minutes"] / session_len))
+            session_len, sessions_needed = service_session_plan(service)
             options = static_option_count(period_config, grade, service, session_len)
             requests.append({
                 "student": student,
@@ -1097,7 +1096,7 @@ def suggest_service_slots(
             continue
         index.add_entry(entry)
 
-    session_len = session_length_for_service(service["service_type"])
+    session_len, _ = service_session_plan(service)
     homeroom = str(student.get("homeroom") or "").strip()
     suggestions: List[Dict[str, Any]] = []
     for provider in qualified_providers(service["service_type"], staff_members):

@@ -317,3 +317,38 @@ def test_published_schedule_is_permanent():
     assert admin_a.post("/reset-generated-schedules").status_code == 200
     assert admin_a.get("/schedule-runs").json() == []
     assert admin_a.get("/schedule").json() == []
+
+
+def test_edited_iep_service_drives_the_schedule():
+    _, users = _make_school_with_users("Theta School")
+    admin = _login(_client(), users["admin"], "pw12345678")
+    assert admin.post("/import/commit", files=_files(STUDENTS_CSV, STAFF_CSV)).status_code == 200
+
+    students = admin.get("/students").json()["students"]
+    student, service = next(
+        (s, svc) for s in students for svc in s["iep_services"]
+        if svc["service_type"] == "Speech"
+    )
+    assert service["id"] and service["minutes_per_week"] and "sessions_per_week" in service
+
+    url = f"/students/{student['id']}/services/{service['id']}"
+    assert admin.put(url, json={"minutes_per_week": 0}).status_code == 422
+    assert admin.put(url, json={"sessions_per_week": 0}).status_code == 422
+    # 4 sessions of 20 minutes.
+    r = admin.put(url, json={"sessions_per_week": 4, "minutes_per_week": 80})
+    assert r.status_code == 200, r.text
+
+    saved = next(
+        svc for s in admin.get("/students").json()["students"] if s["id"] == student["id"]
+        for svc in s["iep_services"] if svc["id"] == service["id"]
+    )
+    assert (saved["sessions_per_week"], saved["minutes_per_week"]) == (4, 80)
+
+    config = admin.get("/schedule/config-defaults").json()["config"]
+    assert admin.post("/save-schedule", json=config).status_code == 200
+    sessions = [
+        e for e in admin.get("/schedule").json()
+        if e["student_id"] == student["id"] and e["service_type"] == "Speech"
+    ]
+    assert len(sessions) == 4
+    assert all(e["end_minute"] - e["start_minute"] == 20 for e in sessions)

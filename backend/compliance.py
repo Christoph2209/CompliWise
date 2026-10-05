@@ -30,7 +30,7 @@ from scheduling_core import (
     staff_full_name,
     get_student_services,
     max_same_service_per_day,
-    session_length_for_service,
+    service_session_plan,
     format_minute,
     format_range,
     MAX_GEN_ED_CLASS_SIZE,
@@ -199,8 +199,8 @@ def check_staff_coverage(
             for service in get_student_services(student):
                 if service["service_type"].lower() != service_key:
                     continue
-                session_length = session_length_for_service(service["service_type"])
-                total_sessions_needed += max(1, math.ceil(service["minutes"] / session_length))
+                session_length, sessions = service_session_plan(service)
+                total_sessions_needed += sessions
 
         if total_sessions_needed == 0:
             continue

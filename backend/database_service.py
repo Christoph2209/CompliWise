@@ -110,13 +110,19 @@ def get_students(
             service_rows = (
                 db.query(StudentService)
                 .filter(StudentService.student_id.in_(student_ids))
+                # Stable order, so the editor's rows don't shuffle on reload.
+                .order_by(StudentService.created_at, StudentService.id)
                 .all()
             )
             for svc in service_rows:
                 services_by_student.setdefault(svc.student_id, []).append({
+                    "id": str(svc.id),
                     "subject": svc.subject_area or svc.service_type,
                     "service_type": svc.service_type,
                     "minutes": svc.minutes_per_week,
+                    "minutes_per_week": svc.minutes_per_week,
+                    "sessions_per_week": svc.sessions_per_week,
+                    "notes": svc.notes,
                     "is_pullout": svc.is_pullout,
                     # Which class a push-in goes into (e.g. Resource Room "Math").
                     # Without it the engine falls back to the service's

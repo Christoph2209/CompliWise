@@ -27,6 +27,7 @@ Each block's SUBJECT maps to a BlockPolicy that says:
                     is protected instruction.
 """
 
+import math
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -120,6 +121,23 @@ def session_length_for_service(service_type: str) -> int:
     return SERVICE_SESSION_LENGTH_MINUTES.get(
         service_type, DEFAULT_SESSION_LENGTH_MINUTES
     )
+
+
+def service_session_plan(service: Dict[str, Any]) -> Tuple[int, int]:
+    """
+    (minutes per session, sessions per week) for one student service.
+
+    When the IEP gives a session count ("3x/week") it is used as is and
+    the weekly minutes are split evenly across those sessions. Otherwise
+    the service type's standard session length decides the count.
+    """
+    minutes = int(service["minutes"])
+    sessions = service.get("sessions_per_week")
+    if sessions and int(sessions) > 0:
+        sessions = int(sessions)
+        return max(1, math.ceil(minutes / sessions)), sessions
+    session_len = session_length_for_service(service["service_type"])
+    return session_len, max(1, math.ceil(minutes / session_len))
 
 
 # ---------------------------------------------------------------
@@ -779,6 +797,7 @@ def get_student_services(student: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "subject": canonical_service_type(service.get("subject")) or service_type,
                 "service_type": service_type,
                 "minutes": int(service.get("minutes") or service.get("minutes_per_week") or 30),
+                "sessions_per_week": service.get("sessions_per_week"),
                 "is_pullout": bool(service.get("is_pullout", True)),
                 "subject_area": service.get("subject_area"),
             })

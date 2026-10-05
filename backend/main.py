@@ -35,7 +35,7 @@ from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import String, and_, cast, exists, func, or_
 from sqlalchemy.orm import Session, aliased
 from starlette.middleware.sessions import SessionMiddleware
@@ -981,8 +981,8 @@ def get_my_students(user: User = Depends(get_current_user), db: Session = Depend
 class StudentServiceCreate(BaseModel):
     service_type: str
     subject_area: str | None = None
-    minutes_per_week: int
-    sessions_per_week: int | None = None
+    minutes_per_week: int = Field(gt=0)
+    sessions_per_week: int | None = Field(default=None, gt=0)
     is_pullout: bool = True
     preferred_provider_id: str | None = None
     notes: str | None = None
@@ -990,8 +990,8 @@ class StudentServiceCreate(BaseModel):
 class StudentServiceUpdate(BaseModel):
     service_type: str | None = None
     subject_area: str | None = None
-    minutes_per_week: int | None = None
-    sessions_per_week: int | None = None
+    minutes_per_week: int | None = Field(default=None, gt=0)
+    sessions_per_week: int | None = Field(default=None, gt=0)
     is_pullout: bool | None = None
     preferred_provider_id: str | None = None
     notes: str | None = None
@@ -1176,6 +1176,7 @@ def suggest_times_for_service(
                 "service_type": service.service_type,
                 "subject": service.service_type,
                 "minutes": service.minutes_per_week,
+                "sessions_per_week": service.sessions_per_week,
                 "is_pullout": service.is_pullout,
                 "subject_area": service.subject_area,
             },
