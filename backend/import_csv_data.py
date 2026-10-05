@@ -1,4 +1,20 @@
-# import_csv_data.py
+"""
+import_csv_data.py
+
+Loads students, staff and IEP services from CSV exports into the database.
+
+Two callers use this module:
+  * The setup wizard (setup.py / main.py) calls import_students,
+    import_staff and import_student_services with the path of an uploaded
+    file, after import_validation.py has checked it.
+  * Running it directly (`python backend/import_csv_data.py` from the
+    repo root) imports the demo CSVs in data/ into a "Demo School".
+
+Imports are upserts keyed on the external ID column (student_id /
+staff_id), so re-running the same file updates rows instead of
+duplicating them. Column names are matched loosely: both the snake_case
+export headers and friendlier spreadsheet headers ("First Name") work.
+"""
 
 import csv
 import json
@@ -17,12 +33,16 @@ from dmscheduler_db import (
 from scheduling_core import canonical_service_type
 
 
+# Default files for the command-line import. Relative paths, so run the
+# script from the repo root.
 STUDENTS_CSV = "./data/Student_export.csv"
-STAFF_CSV = "./data/StaffMember_export.csv"  # change to workers.csv if needed
+STAFF_CSV = "./data/StaffMember_export.csv"
 
 PathLike = Union[str, Path]
 
 
+# The CSV only gives a frequency ("2x/week"), not minutes, so each service
+# gets this placeholder length per session until staff verify the IEP.
 DEFAULT_SESSION_MINUTES = {
     "OT": 30,
     "PT": 30,
@@ -32,12 +52,14 @@ DEFAULT_SESSION_MINUTES = {
     "Psych": 30,
 }
 
+# Pulls the session count out of frequency strings like "2x/week".
 FREQ_PATTERN = re.compile(r"(\d+)\s*x")
 # "daily" means once every school day.
 DAILY_SESSIONS_PER_WEEK = 5
 
 
 def yes_no(value):
+    """Read a CSV yes/no cell as a bool. Blank or unrecognized means False."""
     if value is None:
         return False
 
@@ -47,6 +69,7 @@ def yes_no(value):
 
 
 def clean(value, default=None):
+    """Strip a CSV cell; return `default` when it is missing or blank."""
     if value is None:
         return default
 
@@ -59,6 +82,7 @@ def clean(value, default=None):
 
 
 def to_int(value, default=0):
+    """Parse a CSV cell as an int (accepts "30" or "30.0"), else `default`."""
     try:
         return int(float(value))
     except Exception:
@@ -101,6 +125,7 @@ def parse_grade_from_notes(notes) -> Optional[str]:
 
 
 def get_or_create_school(db, name="Demo School"):
+    """Return the school with this name, creating it if needed (CLI import only)."""
     school = db.query(School).filter(School.name == name).first()
 
     if school:
@@ -142,6 +167,8 @@ def import_students(db, school, csv_path: Optional[PathLike] = None) -> int:
         reader = csv.DictReader(file)
 
         for row in reader:
+            # Prefer the school's own student number; fall back to the
+            # export's row id so the upsert still has a stable key.
             external_student_id = clean(
                 row.get("student_id")
                 or row.get("id")
@@ -151,6 +178,7 @@ def import_students(db, school, csv_path: Optional[PathLike] = None) -> int:
             first_name = clean(row.get("first_name") or row.get("First Name"), "")
             last_name = clean(row.get("last_name") or row.get("Last Name"), "")
 
+            # Skip fully blank rows (e.g. trailing lines from Excel).
             if not external_student_id and not first_name and not last_name:
                 continue
 
@@ -318,12 +346,19 @@ def import_student_services(db, school, csv_path):
     with a placeholder default and flags every row as unverified --
     these numbers must be reviewed against actual IEP paperwork before
     they're trusted for compliance checks.
+
+    Students must already exist (run import_students first); rows whose
+    student_id isn't found are counted and skipped. Returns a dict of
+    counts for the setup wizard to display.
     """
     created = 0
+    already_present = 0
     skipped_no_student = 0
     skipped_bad_json = 0
 
-    with open(csv_path, newline="", encoding="utf-8") as f:
+    # utf-8-sig like the other importers, so an Excel BOM doesn't hide
+    # the first column name.
+    with open(csv_path, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
 
         for row in reader:
@@ -350,10 +385,27 @@ def import_student_services(db, school, csv_path):
                 skipped_bad_json += 1
                 continue
 
+            # Re-importing the same file must not duplicate services.
+            # A service type the student already has is left alone: its
+            # minutes may have been verified/edited by staff since, and
+            # the CSV only carries placeholder minutes.
+            existing_types = {
+                t for (t,) in db.query(StudentService.service_type)
+                .filter(StudentService.student_id == student.id)
+            }
+
             for svc in services:
-                service_type = canonical_service_type(svc.get("service_type"))
+                service_type = (
+                    canonical_service_type(svc.get("service_type"))
+                    if isinstance(svc, dict)
+                    else None
+                )
                 if not service_type:
                     continue
+                if service_type in existing_types:
+                    already_present += 1
+                    continue
+                existing_types.add(service_type)
 
                 frequency = svc.get("frequency")
                 sessions_per_week = _parse_sessions_per_week(frequency)
@@ -392,12 +444,14 @@ def import_student_services(db, school, csv_path):
     db.commit()
     return {
         "services_created": created,
+        "services_already_present": already_present,
         "students_not_found": skipped_no_student,
         "rows_with_bad_json": skipped_bad_json,
     }
 
 
 def main():
+    """Command-line entry point: import the demo CSVs into "Demo School"."""
     db = SessionLocal()
 
     try:
@@ -405,7 +459,7 @@ def main():
 
         import_students(db, school)
         import_staff(db, school)
-        import_student_services(db, school)
+        import_student_services(db, school, csv_path=STUDENTS_CSV)
 
         print("CSV import complete.")
 

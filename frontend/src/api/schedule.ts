@@ -42,11 +42,6 @@ export async function getStaffSchedule(runId?: string, staffId?: string) {
   return res.data;
 }
 
-export async function getMySchedule() {
-  const { data } = await api.get("/my-schedule");
-  return data;
-}
-
 export async function resetSchedule() {
   const { data } = await api.post("/reset-generated-schedules");
   return data;

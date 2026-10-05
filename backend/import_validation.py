@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from dmscheduler_db import StaffMember, Student
-from import_csv_data import DEFAULT_SESSION_MINUTES, _parse_sessions_per_week
+from import_csv_data import DEFAULT_SESSION_MINUTES, FREQ_PATTERN
 from scheduling_core import canonical_service_type
 
 # Same aliases import_csv_data.py accepts, first match wins.
@@ -260,10 +260,10 @@ def _validate_services(row, row_num, report):
         # Same name mapping as the importer, so legacy "SETSS" isn't flagged.
         service_type = canonical_service_type(svc["service_type"])
         frequency = svc.get("frequency")
-        if _parse_sessions_per_week(frequency) is None:
+        if not frequency or not FREQ_PATTERN.search(str(frequency)):
             report.add(row_num, "warning", "iep_services",
                        f"{service_type}: frequency '{frequency or ''}' not understood "
-                       "(expected like '2x/week' or 'daily'); 1 session/week will be assumed.")
+                       "(expected like '2x/week'); 1 session/week will be assumed.")
         if service_type not in DEFAULT_SESSION_MINUTES:
             report.add(row_num, "warning", "iep_services",
                        f"{service_type}: unfamiliar service type; a 30-minute session length will be assumed.")
