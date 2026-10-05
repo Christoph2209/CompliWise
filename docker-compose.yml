@@ -1,4 +1,5 @@
-version: "3.8"
+# Local development / demo stack. For a real deployment use
+# docker-compose.prod.yml (HTTPS, no exposed database); see DEPLOY.md.
 
 services:
   db:
@@ -11,20 +12,29 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     # Exposed on 5433 (not 5432) to avoid clashing with a native Postgres
-    # install already running on this machine.
+    # install already running on this machine. Bound to 127.0.0.1 so only
+    # this machine can connect, not the rest of the network.
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   backend:
     build: ./backend
     restart: unless-stopped
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-compliwise}:${POSTGRES_PASSWORD:-changeme}@db:5432/${POSTGRES_DB:-compliwise}
       SESSION_SECRET: ${SESSION_SECRET}
+      SCHOOL_YEAR: ${SCHOOL_YEAR:-2026-2027}
       # Comma-separated list of frontend origins allowed to call the API.
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
     ports:
       - "8000:8000"
     # env_file: .env   # uncomment once you have a real .env with secrets

@@ -11,6 +11,7 @@ It is a FastAPI backend with a PostgreSQL database and a React frontend. It is d
 - [Project Layout](#project-layout)
 - [Getting Started](#getting-started)
 - [Running with Docker](#running-with-docker)
+- [Deploying](DEPLOY.md)
 - [Running the Tests](#running-the-tests)
 - [Roles](#roles)
 - [Scheduling Workflow](#scheduling-workflow)
@@ -57,6 +58,7 @@ backend/
   alembic/              database migrations
   tests/                end-to-end tests
 frontend/               React app
+deploy/                 Caddyfile for the production stack
 data/                   sample CSV exports
 ```
 
@@ -154,7 +156,9 @@ cp .env.example .env    # then set SESSION_SECRET and the POSTGRES_* values
 docker compose up --build
 ```
 
-This starts Postgres, the backend on port 8000, and the frontend on port 5173. Set `VITE_API_URL` to the address staff browsers use to reach the backend before building.
+This starts Postgres, the backend on port 8000, and the frontend on port 5173, over plain HTTP. It is meant for development and demos.
+
+For a real deployment with student data, use `docker-compose.prod.yml` instead: it adds HTTPS, keeps the database off the network and takes nightly backups. See [DEPLOY.md](DEPLOY.md).
 
 ## Running the Tests
 
