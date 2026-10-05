@@ -252,8 +252,16 @@ def test_schedule_generation_stays_inside_one_school():
     assert len(mine) < len(all_entries)
     assert admin_b.get("/compliance-flags").json() == []
 
+    # Without run_id, /schedule returns only the latest run, not every run.
+    assert admin_a.post("/save-schedule", json=config).status_code == 200
+    runs_a = admin_a.get("/schedule-runs").json()
+    assert len(runs_a) == 2
+    latest = admin_a.get("/schedule").json()
+    assert {e["run_id"] for e in latest} == {runs_a[0]["id"]}
+    assert len(latest) == runs_a[0]["entry_count"]
+
     # School B's reset can't touch school A's schedules.
     assert admin_b.post("/reset-generated-schedules").status_code == 200
-    assert len(admin_a.get("/schedule-runs").json()) == 1
+    assert len(admin_a.get("/schedule-runs").json()) == 2
     assert admin_a.post("/reset-generated-schedules").status_code == 200
     assert admin_a.get("/schedule-runs").json() == []
