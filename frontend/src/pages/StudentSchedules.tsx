@@ -109,6 +109,8 @@ export default function StudentSchedules() {
   const [isSaving, setIsSaving] = useState(false);
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  // Published runs are permanent; the server refuses edits to them.
+  const [runLocked, setRunLocked] = useState(false);
 
   // Same run maps to the same cache entry no matter which page fetched it,
   // so switching between Student/Staff schedule views for one run reuses
@@ -189,7 +191,7 @@ export default function StudentSchedules() {
   for (let m = dayStart; m <= dayEnd; m += TICK_MINUTES) ticks.push(m);
 
   function openEditor(item: ScheduleEntry) {
-    if (isTeacher) return;
+    if (isTeacher || runLocked) return;
     setSaveError(null);
     setEditingEntry(item);
     setDraft({
@@ -281,7 +283,22 @@ export default function StudentSchedules() {
     <div style={{ padding: "28px 36px" }}>
       <h1>{isTeacher ? "My Students' Schedules" : "Student Schedules"}</h1>
 
-      {canCompareRuns && <RunSelector selectedRunId={selectedRunId} onChange={setSelectedRunId} />}
+      {canCompareRuns && (
+        <RunSelector
+          selectedRunId={selectedRunId}
+          onChange={setSelectedRunId}
+          onSelectedRunChange={(run) => {
+            setRunLocked(run?.status === "published");
+            closeEditor();
+          }}
+        />
+      )}
+
+      {canCompareRuns && runLocked && (
+        <p className="cal-notice" style={{ marginBottom: "12px" }}>
+          This schedule is published, so it can't be edited. Generate a new draft to make changes.
+        </p>
+      )}
 
       {isTeacher && students.length === 0 && <p>No students are currently assigned to your schedule.</p>}
 
@@ -374,7 +391,7 @@ export default function StudentSchedules() {
                       borderLeftColor: style.accent,
                     };
 
-                    return isTeacher ? (
+                    return isTeacher || runLocked ? (
                       <div key={item.id} className="cal-card" style={cardStyle} title={tooltip}>
                         {renderCardContent(item, height)}
                       </div>

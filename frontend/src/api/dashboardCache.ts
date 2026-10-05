@@ -8,9 +8,10 @@ const STALE_MS = 60_000; // treat cached data as fresh for 60s
 type DashboardData = {
   students: any[];
   staff: any[];
-  // Entries in the latest run. Only the count is shown, so it comes from
-  // the run list rather than downloading every entry.
-  scheduleEntryCount: number;
+  // Generated schedules not yet published (from the run list).
+  draftScheduleCount: number;
+  // When the current published schedule was published, if any.
+  lastPublishedAt: string | null;
   flags: any[];
   fetchedAt: number;
 };
@@ -37,7 +38,13 @@ export async function loadDashboard(force = false): Promise<DashboardData> {
     const data: DashboardData = {
       students: students || [],
       staff: staff || [],
-      scheduleEntryCount: runs?.[0]?.entry_count ?? 0,
+      draftScheduleCount: (runs || []).filter((r) => r.status !== "published").length,
+      lastPublishedAt:
+        (runs || [])
+          .map((r) => r.published_at)
+          .filter((d): d is string => !!d)
+          .sort()
+          .at(-1) ?? null,
       flags: flags || [],
       fetchedAt: Date.now(),
     };

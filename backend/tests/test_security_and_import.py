@@ -265,3 +265,58 @@ def test_schedule_generation_stays_inside_one_school():
     assert len(admin_a.get("/schedule-runs").json()) == 2
     assert admin_a.post("/reset-generated-schedules").status_code == 200
     assert admin_a.get("/schedule-runs").json() == []
+
+
+def test_published_schedule_is_permanent():
+    _, users_a = _make_school_with_users("Zeta School")
+    _, users_b = _make_school_with_users("Eta School")
+    admin_a = _login(_client(), users_a["admin"], "pw12345678")
+    principal_a = _login(_client(), users_a["principal"], "pw12345678")
+    teacher_a = _login(_client(), users_a["teacher"], "pw12345678")
+    admin_b = _login(_client(), users_b["admin"], "pw12345678")
+
+    assert admin_a.post("/import/commit", files=_files(STUDENTS_CSV, STAFF_CSV)).status_code == 200
+    config = admin_a.get("/schedule/config-defaults").json()["config"]
+    assert admin_a.post("/save-schedule", json=config).status_code == 200
+    run = admin_a.get("/schedule-runs").json()[0]
+    assert run["status"] == "draft"
+
+    # Only managers of the same school can publish.
+    assert teacher_a.post(f"/schedule-runs/{run['id']}/publish").status_code == 403
+    assert admin_b.post(f"/schedule-runs/{run['id']}/publish").status_code == 404
+    r = principal_a.post(f"/schedule-runs/{run['id']}/publish")
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "published"
+    assert admin_a.post(f"/schedule-runs/{run['id']}/publish").status_code == 409
+    published = admin_a.get("/schedule-runs").json()[0]
+    assert published["status"] == "published" and published["published_at"]
+
+    # Published entries are locked.
+    entry = admin_a.get("/schedule", params={"run_id": run["id"]}).json()[0]
+    r = admin_a.put(f"/schedule/{entry['id']}", json={"room": "Gym"})
+    assert r.status_code == 409, r.text
+
+    # A newer draft doesn't replace the published schedule as the default...
+    assert admin_a.post("/save-schedule", json=config).status_code == 200
+    runs = admin_a.get("/schedule-runs").json()
+    draft = runs[0]
+    assert draft["status"] == "draft" and draft["id"] != run["id"]
+    assert {e["run_id"] for e in admin_a.get("/schedule").json()} == {run["id"]}
+    staff_id = entry["staff_id"]
+    db = SessionLocal()
+    teacher = db.query(User).filter(User.email == users_a["teacher"]).first()
+    teacher.staff_id = uuid.UUID(staff_id)
+    db.commit()
+    db.close()
+    assert {e["run_id"] for e in teacher_a.get("/staff-schedule").json()} == {run["id"]}
+    # ...but drafts stay editable.
+    draft_entry = admin_a.get("/schedule", params={"run_id": draft["id"]}).json()[0]
+    assert admin_a.put(f"/schedule/{draft_entry['id']}", json={"room": "Gym"}).status_code == 200
+
+    # Reset removes drafts only.
+    r = admin_a.post("/reset-generated-schedules")
+    assert r.status_code == 200, r.text
+    assert r.json()["published_runs_kept"] == 1
+    remaining = admin_a.get("/schedule-runs").json()
+    assert [x["id"] for x in remaining] == [run["id"]]
+    assert remaining[0]["entry_count"] == run["entry_count"]
