@@ -51,6 +51,7 @@ from database_service import (
     create_schedule_entries,
     create_schedule_run,
     create_staff_schedule_entries,
+    delete_entity_many,
     get_staff,
     get_students,
 )
@@ -254,8 +255,8 @@ VALID_DELIVERIES = {"pullout", "push_in", "class"}
 # Name given to runs that hold a whole-school schedule (vs. compliance-only runs).
 FULL_SCHEDULE_RUN_NAME = "Full School Schedule"
 
-# ScheduleRun.status values. A published run is permanent: its entries
-# can't be edited and Reset doesn't delete it.
+# ScheduleRun.status values. A published run's entries can't be edited;
+# only Reset (which wipes every run) removes it.
 DRAFT = "draft"
 PUBLISHED = "published"
 
@@ -1879,9 +1880,9 @@ def _run_summary(result: dict, period_config: PeriodConfig, critical_flags: list
 @app.post("/schedule-runs/{run_id}/publish")
 def publish_schedule_run(run_id: str, request: Request, user: User = Depends(require_roles(*MANAGERS))):
     """
-    Make a draft run permanent. It becomes the schedule teachers see,
-    its entries can no longer be edited, and Reset won't delete it.
-    There is no unpublish: to change it, generate and publish a new run.
+    Make a draft run permanent. It becomes the schedule teachers see and
+    its entries can no longer be edited. There is no unpublish: to change
+    it, generate and publish a new run (or Reset, which wipes every run).
     """
     db = SessionLocal()
     try:
@@ -2003,40 +2004,18 @@ def save_schedule(
 
 @app.post("/reset-generated-schedules")
 def reset_generated_schedules(request: Request, user: User = Depends(require_roles(*ADMIN))):
-    """Delete THIS SCHOOL's draft schedule runs and everything generated
-    with them (entries, compliance flags, flex groups). Published runs
-    are permanent and kept. Student and staff records remain unchanged.
-    Admin-only and audited: it's destructive."""
+    """Delete ALL of this school's generated schedule output, published
+    runs included, for a clean regenerate. Student and staff records
+    remain unchanged. Admin-only and audited: it's destructive."""
     school_id = user.school_id
     try:
-        db = SessionLocal()
-        try:
-            drafts = db.query(ScheduleRun).filter(
-                ScheduleRun.school_id == school_id,
-                ScheduleRun.status != PUBLISHED,
-            )
-            # Entries, staff entries, flags and flex groups all reference
-            # their run with ON DELETE CASCADE, so they go with it.
-            counts = {
-                "schedule_entries": db.query(func.count(ScheduleEntry.id))
-                .filter(ScheduleEntry.run_id.in_(drafts.with_entities(ScheduleRun.id)))
-                .scalar(),
-                "compliance_flags": db.query(func.count(ComplianceFlag.id))
-                .filter(ComplianceFlag.run_id.in_(drafts.with_entities(ScheduleRun.id)))
-                .scalar(),
-                "flex_groups": db.query(func.count(FlexGroup.id))
-                .filter(FlexGroup.run_id.in_(drafts.with_entities(ScheduleRun.id)))
-                .scalar(),
-            }
-            deleted_runs = drafts.delete(synchronize_session=False)
-            db.commit()
-            kept_published = (
-                db.query(func.count(ScheduleRun.id))
-                .filter(ScheduleRun.school_id == school_id, ScheduleRun.status == PUBLISHED)
-                .scalar()
-            )
-        finally:
-            db.close()
+        deleted_schedule_entries = delete_entity_many("ScheduleEntry", {}, school_id=school_id)
+        deleted_compliance_flags = delete_entity_many("ComplianceFlag", {}, school_id=school_id)
+        # Deleting flex groups cascades to their flex_group_students rows.
+        deleted_flex_groups = delete_entity_many("FlexGroup", {}, school_id=school_id)
+        deleted_flex_group_students = {"deleted": "cascaded with flex groups"}
+        # Runs last; staff_schedule_entries cascade from them.
+        deleted_schedule_runs = delete_entity_many("ScheduleRun", {}, school_id=school_id)
 
         db = SessionLocal()
         try:
@@ -2046,7 +2025,7 @@ def reset_generated_schedules(request: Request, user: User = Depends(require_rol
                 school_id=school_id,
                 user_id=user.id,
                 entity_type="ScheduleRun",
-                after={"draft_runs_deleted": deleted_runs, "published_runs_kept": kept_published},
+                after={"schedule_runs": deleted_schedule_runs.get("deleted")},
                 ip_address=_client_ip(request),
             )
         finally:
@@ -2054,17 +2033,14 @@ def reset_generated_schedules(request: Request, user: User = Depends(require_rol
 
         return {
             "success": True,
-            "message": (
-                "Draft schedules reset successfully."
-                + (f" {kept_published} published schedule(s) kept." if kept_published else "")
-            ),
+            "message": "Generated schedules reset successfully.",
             "deleted": {
-                "schedule_runs": {"deleted": deleted_runs},
-                "schedule_entries": {"deleted": counts["schedule_entries"]},
-                "compliance_flags": {"deleted": counts["compliance_flags"]},
-                "flex_groups": {"deleted": counts["flex_groups"]},
+                "schedule_entries": deleted_schedule_entries,
+                "schedule_runs": deleted_schedule_runs,
+                "compliance_flags": deleted_compliance_flags,
+                "flex_groups": deleted_flex_groups,
+                "flex_group_students": deleted_flex_group_students,
             },
-            "published_runs_kept": kept_published,
         }
 
     except DBAPIError as error:

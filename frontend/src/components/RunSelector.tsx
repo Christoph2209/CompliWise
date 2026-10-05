@@ -43,9 +43,8 @@ export default function RunSelector({ selectedRunId, onChange, onSelectedRunChan
     if (!selectedRun) return;
     const ok = window.confirm(
       "Publish this schedule?\n\n" +
-        "It becomes the schedule teachers see. Published schedules are permanent: " +
-        "they can't be edited, and Reset won't delete them. To change it later, " +
-        "generate a new draft and publish that."
+        "It becomes the schedule teachers see, and it can no longer be edited. " +
+        "To change it later, generate a new draft and publish that."
     );
     if (!ok) return;
 

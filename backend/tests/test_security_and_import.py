@@ -313,10 +313,7 @@ def test_published_schedule_is_permanent():
     draft_entry = admin_a.get("/schedule", params={"run_id": draft["id"]}).json()[0]
     assert admin_a.put(f"/schedule/{draft_entry['id']}", json={"room": "Gym"}).status_code == 200
 
-    # Reset removes drafts only.
-    r = admin_a.post("/reset-generated-schedules")
-    assert r.status_code == 200, r.text
-    assert r.json()["published_runs_kept"] == 1
-    remaining = admin_a.get("/schedule-runs").json()
-    assert [x["id"] for x in remaining] == [run["id"]]
-    assert remaining[0]["entry_count"] == run["entry_count"]
+    # Reset wipes everything, published runs included.
+    assert admin_a.post("/reset-generated-schedules").status_code == 200
+    assert admin_a.get("/schedule-runs").json() == []
+    assert admin_a.get("/schedule").json() == []

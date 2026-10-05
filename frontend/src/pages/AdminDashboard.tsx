@@ -101,9 +101,13 @@ export default function Dashboard() {
             ⚙️ Generate Schedule
           </button>
           <button className="danger" onClick={async () => {
+            if (!window.confirm(
+              "Reset deletes every generated schedule, including published ones, " +
+              "plus their compliance flags and flex groups. Students and staff are kept.\n\nContinue?"
+            )) return;
             try {
               const result = await resetSchedule();
-              alert(result?.message || "Draft schedules reset.");
+              alert(result?.message || "Schedules reset.");
               // Reset wipes the schedule for every run, so clear the whole
               // shared cache (StudentSchedules/TeacherSchedules included)
               // rather than just this page's own cached bundle.

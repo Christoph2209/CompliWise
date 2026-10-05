@@ -17,7 +17,7 @@ export async function getScheduleRuns(): Promise<ScheduleRun[]> {
 }
 
 // Makes a draft run permanent: teachers see it, and it can no longer be
-// edited or deleted by Reset.
+// edited. Only Reset (which wipes every run) removes it.
 export async function publishScheduleRun(
   runId: string
 ): Promise<Pick<ScheduleRun, "id" | "status" | "published_at">> {
