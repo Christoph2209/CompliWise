@@ -35,7 +35,7 @@ from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import String, and_, cast, exists, func, or_
 from sqlalchemy.orm import Session, aliased
 from starlette.middleware.sessions import SessionMiddleware
@@ -255,6 +255,11 @@ VALID_DELIVERIES = {"pullout", "push_in", "class"}
 # Name given to runs that hold a whole-school schedule (vs. compliance-only runs).
 FULL_SCHEDULE_RUN_NAME = "Full School Schedule"
 
+# ScheduleRun.status values. A published run's entries can't be edited;
+# only Reset (which wipes every run) removes it.
+DRAFT = "draft"
+PUBLISHED = "published"
+
 # Background generation jobs by job id, kept in memory: status is lost on
 # restart, and with several server processes a status poll may miss its job.
 SCHEDULE_JOBS: dict[str, dict] = {}
@@ -328,6 +333,20 @@ def _latest_full_run(db: Session, school_id) -> ScheduleRun | None:
         .order_by(ScheduleRun.created_at.desc())
         .first()
     )
+
+
+def _current_run(db: Session, school_id) -> ScheduleRun | None:
+    """The schedule staff should be working from: the most recently
+    published full run, or the latest full run if none is published yet."""
+    published = (
+        db.query(ScheduleRun)
+        .filter(ScheduleRun.school_id == school_id)
+        .filter(ScheduleRun.name == FULL_SCHEDULE_RUN_NAME)
+        .filter(ScheduleRun.status == PUBLISHED)
+        .order_by(ScheduleRun.published_at.desc())
+        .first()
+    )
+    return published or _latest_full_run(db, school_id)
 
 
 def _run_period_config(run: ScheduleRun) -> PeriodConfig:
@@ -962,8 +981,8 @@ def get_my_students(user: User = Depends(get_current_user), db: Session = Depend
 class StudentServiceCreate(BaseModel):
     service_type: str
     subject_area: str | None = None
-    minutes_per_week: int
-    sessions_per_week: int | None = None
+    minutes_per_week: int = Field(gt=0)
+    sessions_per_week: int | None = Field(default=None, gt=0)
     is_pullout: bool = True
     preferred_provider_id: str | None = None
     notes: str | None = None
@@ -971,8 +990,8 @@ class StudentServiceCreate(BaseModel):
 class StudentServiceUpdate(BaseModel):
     service_type: str | None = None
     subject_area: str | None = None
-    minutes_per_week: int | None = None
-    sessions_per_week: int | None = None
+    minutes_per_week: int | None = Field(default=None, gt=0)
+    sessions_per_week: int | None = Field(default=None, gt=0)
     is_pullout: bool | None = None
     preferred_provider_id: str | None = None
     notes: str | None = None
@@ -1157,6 +1176,7 @@ def suggest_times_for_service(
                 "service_type": service.service_type,
                 "subject": service.service_type,
                 "minutes": service.minutes_per_week,
+                "sessions_per_week": service.sessions_per_week,
                 "is_pullout": service.is_pullout,
                 "subject_area": service.subject_area,
             },
@@ -1406,8 +1426,9 @@ def update_staff(
 @app.get("/schedule")
 def list_schedule_entries(run_id: str | None = None, user: User = Depends(require_roles(*ALL_STAFF))):
     """
-    Student schedule entries for one run: `run_id`, or the school's latest
-    full run when omitted (same default as /staff-schedule).
+    Student schedule entries for one run: `run_id`, or the school's
+    current run when omitted (the latest published one, else the latest
+    one; same default as /staff-schedule).
 
     Admins/principals get the whole school's entries. Teachers and aides
     get the entries they deliver, plus the pull-outs and push-ins (ENL,
@@ -1426,7 +1447,7 @@ def list_schedule_entries(run_id: str | None = None, user: User = Depends(requir
         if run_id:
             run_uuid = _parse_uuid(run_id, "Schedule run")
         else:
-            run = _latest_full_run(db, user.school_id)
+            run = _current_run(db, user.school_id)
             if not run:
                 return []
             run_uuid = run.id
@@ -1545,6 +1566,11 @@ def update_schedule_entry(
         )
         if not entry:
             raise HTTPException(status_code=404, detail="Not found")
+        if db.query(ScheduleRun.status).filter(ScheduleRun.id == entry.run_id).scalar() == PUBLISHED:
+            raise HTTPException(
+                status_code=409,
+                detail="This schedule is published and can't be edited. Generate a new draft to make changes.",
+            )
 
         before = _jsonable({key: getattr(entry, key) for key in payload})
 
@@ -1616,8 +1642,8 @@ def list_staff_schedule_entries(
     user: User = Depends(require_roles(*ALL_STAFF)),
 ):
     """Saved teacher schedules: one row per teacher per class/session,
-    including prep and lunch. Defaults to the latest full run. Teachers
-    only ever get their own rows."""
+    including prep and lunch. Defaults to the current run (latest
+    published, else latest). Teachers only ever get their own rows."""
     db = SessionLocal()
     try:
         if user.role not in ("admin", "principal"):
@@ -1629,7 +1655,7 @@ def list_staff_schedule_entries(
             if run_id:
                 run_uuid = UUID(run_id)
             else:
-                run = _latest_full_run(db, user.school_id)
+                run = _current_run(db, user.school_id)
                 if not run:
                     return []
                 run_uuid = run.id
@@ -1852,6 +1878,50 @@ def _run_summary(result: dict, period_config: PeriodConfig, critical_flags: list
     }
 
 
+@app.post("/schedule-runs/{run_id}/publish")
+def publish_schedule_run(run_id: str, request: Request, user: User = Depends(require_roles(*MANAGERS))):
+    """
+    Make a draft run permanent. It becomes the schedule teachers see and
+    its entries can no longer be edited. There is no unpublish: to change
+    it, generate and publish a new run (or Reset, which wipes every run).
+    """
+    db = SessionLocal()
+    try:
+        run = (
+            db.query(ScheduleRun)
+            .filter(ScheduleRun.id == _parse_uuid(run_id, "Schedule run"), ScheduleRun.school_id == user.school_id)
+            .first()
+        )
+        if not run:
+            raise HTTPException(status_code=404, detail="Schedule run not found")
+        if run.status == PUBLISHED:
+            raise HTTPException(status_code=409, detail="This schedule is already published.")
+
+        before_status = run.status
+        run.status = PUBLISHED
+        run.published_at = datetime.utcnow()
+        db.commit()
+
+        write_audit_log(
+            db,
+            action="Publish Schedule",
+            school_id=user.school_id,
+            user_id=user.id,
+            entity_type="ScheduleRun",
+            entity_id=run.id,
+            before={"status": before_status},
+            after={"status": PUBLISHED},
+            ip_address=_client_ip(request),
+        )
+        return {
+            "id": str(run.id),
+            "status": run.status,
+            "published_at": run.published_at.isoformat(),
+        }
+    finally:
+        db.close()
+
+
 @app.post("/save-schedule")
 def save_schedule(
     config: ScheduleGenerationConfig,
@@ -1935,8 +2005,9 @@ def save_schedule(
 
 @app.post("/reset-generated-schedules")
 def reset_generated_schedules(request: Request, user: User = Depends(require_roles(*ADMIN))):
-    """Delete THIS SCHOOL's generated schedule output. Student and staff
-    records remain unchanged. Admin-only and audited: it's destructive."""
+    """Delete ALL of this school's generated schedule output, published
+    runs included, for a clean regenerate. Student and staff records
+    remain unchanged. Admin-only and audited: it's destructive."""
     school_id = user.school_id
     try:
         deleted_schedule_entries = delete_entity_many("ScheduleEntry", {}, school_id=school_id)

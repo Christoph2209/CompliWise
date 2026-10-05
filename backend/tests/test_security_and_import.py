@@ -265,3 +265,90 @@ def test_schedule_generation_stays_inside_one_school():
     assert len(admin_a.get("/schedule-runs").json()) == 2
     assert admin_a.post("/reset-generated-schedules").status_code == 200
     assert admin_a.get("/schedule-runs").json() == []
+
+
+def test_published_schedule_is_permanent():
+    _, users_a = _make_school_with_users("Zeta School")
+    _, users_b = _make_school_with_users("Eta School")
+    admin_a = _login(_client(), users_a["admin"], "pw12345678")
+    principal_a = _login(_client(), users_a["principal"], "pw12345678")
+    teacher_a = _login(_client(), users_a["teacher"], "pw12345678")
+    admin_b = _login(_client(), users_b["admin"], "pw12345678")
+
+    assert admin_a.post("/import/commit", files=_files(STUDENTS_CSV, STAFF_CSV)).status_code == 200
+    config = admin_a.get("/schedule/config-defaults").json()["config"]
+    assert admin_a.post("/save-schedule", json=config).status_code == 200
+    run = admin_a.get("/schedule-runs").json()[0]
+    assert run["status"] == "draft"
+
+    # Only managers of the same school can publish.
+    assert teacher_a.post(f"/schedule-runs/{run['id']}/publish").status_code == 403
+    assert admin_b.post(f"/schedule-runs/{run['id']}/publish").status_code == 404
+    r = principal_a.post(f"/schedule-runs/{run['id']}/publish")
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "published"
+    assert admin_a.post(f"/schedule-runs/{run['id']}/publish").status_code == 409
+    published = admin_a.get("/schedule-runs").json()[0]
+    assert published["status"] == "published" and published["published_at"]
+
+    # Published entries are locked.
+    entry = admin_a.get("/schedule", params={"run_id": run["id"]}).json()[0]
+    r = admin_a.put(f"/schedule/{entry['id']}", json={"room": "Gym"})
+    assert r.status_code == 409, r.text
+
+    # A newer draft doesn't replace the published schedule as the default...
+    assert admin_a.post("/save-schedule", json=config).status_code == 200
+    runs = admin_a.get("/schedule-runs").json()
+    draft = runs[0]
+    assert draft["status"] == "draft" and draft["id"] != run["id"]
+    assert {e["run_id"] for e in admin_a.get("/schedule").json()} == {run["id"]}
+    staff_id = entry["staff_id"]
+    db = SessionLocal()
+    teacher = db.query(User).filter(User.email == users_a["teacher"]).first()
+    teacher.staff_id = uuid.UUID(staff_id)
+    db.commit()
+    db.close()
+    assert {e["run_id"] for e in teacher_a.get("/staff-schedule").json()} == {run["id"]}
+    # ...but drafts stay editable.
+    draft_entry = admin_a.get("/schedule", params={"run_id": draft["id"]}).json()[0]
+    assert admin_a.put(f"/schedule/{draft_entry['id']}", json={"room": "Gym"}).status_code == 200
+
+    # Reset wipes everything, published runs included.
+    assert admin_a.post("/reset-generated-schedules").status_code == 200
+    assert admin_a.get("/schedule-runs").json() == []
+    assert admin_a.get("/schedule").json() == []
+
+
+def test_edited_iep_service_drives_the_schedule():
+    _, users = _make_school_with_users("Theta School")
+    admin = _login(_client(), users["admin"], "pw12345678")
+    assert admin.post("/import/commit", files=_files(STUDENTS_CSV, STAFF_CSV)).status_code == 200
+
+    students = admin.get("/students").json()["students"]
+    student, service = next(
+        (s, svc) for s in students for svc in s["iep_services"]
+        if svc["service_type"] == "Speech"
+    )
+    assert service["id"] and service["minutes_per_week"] and "sessions_per_week" in service
+
+    url = f"/students/{student['id']}/services/{service['id']}"
+    assert admin.put(url, json={"minutes_per_week": 0}).status_code == 422
+    assert admin.put(url, json={"sessions_per_week": 0}).status_code == 422
+    # 4 sessions of 20 minutes.
+    r = admin.put(url, json={"sessions_per_week": 4, "minutes_per_week": 80})
+    assert r.status_code == 200, r.text
+
+    saved = next(
+        svc for s in admin.get("/students").json()["students"] if s["id"] == student["id"]
+        for svc in s["iep_services"] if svc["id"] == service["id"]
+    )
+    assert (saved["sessions_per_week"], saved["minutes_per_week"]) == (4, 80)
+
+    config = admin.get("/schedule/config-defaults").json()["config"]
+    assert admin.post("/save-schedule", json=config).status_code == 200
+    sessions = [
+        e for e in admin.get("/schedule").json()
+        if e["student_id"] == student["id"] and e["service_type"] == "Speech"
+    ]
+    assert len(sessions) == 4
+    assert all(e["end_minute"] - e["start_minute"] == 20 for e in sessions)

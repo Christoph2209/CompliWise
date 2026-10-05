@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getStudents, getMyStudents, updateStudent } from "../api/students";
+import { syncStudentServices } from "../api/studentServices";
 import { useAuth } from "../context/authContext";
 import StudentEditor from "../components/StudentEditor";
 import "../components/StudentEditor.css";
@@ -65,6 +66,10 @@ export default function Students() {
     // Let errors propagate to StudentEditor, which surfaces them in
     // the modal instead of only logging to the console.
     await updateStudent(selectedStudent.id, payload);
+    if (selectedStudent.has_iep) {
+      const original = students.find((s) => s.id === selectedStudent.id)?.iep_services ?? [];
+      await syncStudentServices(selectedStudent.id, original, selectedStudent.iep_services ?? []);
+    }
     await loadStudents();
     setSelectedStudent(null);
   }
