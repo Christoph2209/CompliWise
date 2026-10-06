@@ -1,11 +1,6 @@
 import { useState } from "react";
 import "./StudentEditor.css";
-
-interface IepService {
-  service_type: string;
-  sessions_per_week: number | null;
-  minutes_per_session: number | null;
-}
+import { toIepServiceRow, type IepService } from "../api/studentServices";
 
 interface Props {
   student: any;
@@ -23,6 +18,11 @@ const SERVICE_TYPES = [
   "ICT",
   "Counseling",
 ];
+
+function serviceTypeOptions(current: string) {
+  // Keep an imported type that isn't in the list selectable as itself.
+  return current && !SERVICE_TYPES.includes(current) ? [current, ...SERVICE_TYPES] : SERVICE_TYPES;
+}
 
 export default function StudentEditor({
   student,
@@ -42,7 +42,7 @@ export default function StudentEditor({
     });
   }
 
-  const iepServices: IepService[] = student.iep_services ?? [];
+  const iepServices: IepService[] = (student.iep_services ?? []).map(toIepServiceRow);
 
   function updateService(index: number, field: keyof IepService, value: any) {
     const next = iepServices.map((svc, i) =>
@@ -70,6 +70,13 @@ export default function StudentEditor({
 
   async function handleSave() {
     setSaveError(null);
+    if (
+      student.has_iep &&
+      iepServices.some((svc) => !svc.sessions_per_week || !svc.minutes_per_session)
+    ) {
+      setSaveError("Each IEP service needs sessions per week and minutes per session (at least 1).");
+      return;
+    }
     setIsSaving(true);
     try {
       await onSave();
@@ -198,7 +205,7 @@ export default function StudentEditor({
                         updateService(index, "service_type", e.target.value)
                       }
                     >
-                      {SERVICE_TYPES.map((type) => (
+                      {serviceTypeOptions(svc.service_type).map((type) => (
                         <option key={type} value={type}>
                           {type}
                         </option>
@@ -213,7 +220,7 @@ export default function StudentEditor({
                     <input
                       id={`sessions_per_week_${index}`}
                       type="number"
-                      min={0}
+                      min={1}
                       value={svc.sessions_per_week ?? ""}
                       onChange={(e) =>
                         updateService(
@@ -232,7 +239,7 @@ export default function StudentEditor({
                     <input
                       id={`minutes_per_session_${index}`}
                       type="number"
-                      min={0}
+                      min={1}
                       value={svc.minutes_per_session ?? ""}
                       onChange={(e) =>
                         updateService(
@@ -252,6 +259,13 @@ export default function StudentEditor({
                   >
                     ✕
                   </button>
+
+                  <p className="iep-service-total">
+                    {svc.sessions_per_week && svc.minutes_per_session
+                      ? `${svc.sessions_per_week * svc.minutes_per_session} min/week`
+                      : "Enter sessions and minutes"}
+                    {svc.notes ? ` · ${svc.notes}` : ""}
+                  </p>
                 </div>
               ))}
 

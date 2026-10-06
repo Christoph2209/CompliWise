@@ -19,6 +19,11 @@ PIPELINE
        - push-in: only blocks in the service's push-in subjects; the
          provider joins the homeroom, and students from the same room
          at the same time are grouped into one session.
+     ENL groups prefer students from one homeroom, wherever that
+     leaves nobody short of a session.
+     Once the groups are final, an ENL pull-out group whose students
+     are all in one homeroom (or a lone student) becomes a push-in,
+     if its block allows ENL push-in.
   2. Specials: staff each homeroom's Specials blocks (PE first).
   3. FLEX groups inside each grade's FLEX-role block (I-Block).
   4. Fill every remaining minute of every student's day from the
@@ -37,6 +42,7 @@ ENTRY TIME FIELDS
   delivery                  -- "pullout" | "push_in" | "class"
 """
 
+import copy
 import logging
 import math
 from collections import Counter
@@ -56,7 +62,7 @@ from scheduling_core import (
     staff_full_name,
     get_student_services,
     max_same_service_per_day,
-    session_length_for_service,
+    service_session_plan,
     normalize_grade,
     format_range,
     MIN_DAYS_BETWEEN_SAME_SERVICE,
@@ -80,6 +86,17 @@ DELIVERY_BREAK = "break"
 
 # Rooms aren't modeled yet; a pull-out happens in "the provider's room".
 PULLOUT_ROOM = ""
+
+# Services whose pull-out groups become push-ins when every student in
+# the group is in the same homeroom (see
+# convert_same_homeroom_groups_to_pushin).
+PUSHIN_WHEN_SAME_HOMEROOM = {"ENL"}
+# Score nudges that steer those services toward one-homeroom groups, so
+# more of them can become push-ins. Small one-homeroom groups use up
+# provider time, so place_services_preferring_homeroom_groups drops the
+# preference wherever it would leave a student short of a service.
+SAME_HOMEROOM_GROUP_BONUS = 400
+MIXED_HOMEROOM_GROUP_PENALTY = 300
 
 SPECIALS_PRIORITY_ORDER = ["PE", "Music", "Art"]
 
@@ -178,6 +195,10 @@ class ScheduleIndex:
     """
 
     def __init__(self):
+        # student_id -> homeroom, for students whose service groups should
+        # prefer their own homeroom (see _score_candidate). Empty = no
+        # such preference.
+        self.student_homeroom: Dict[str, str] = {}
         # (student_id, day) -> booked [start, end) intervals
         self.student_intervals: Dict[Tuple[str, str], List[Tuple[int, int]]] = {}
         # (teacher name, day) -> booked intervals with their (subject, room) label
@@ -373,6 +394,29 @@ class ScheduleIndex:
                     self.pullouts_by_student_subject.get(subject_key, 0) + 1
                 )
 
+    def convert_pullout_to_pushin(self, entry: Dict[str, Any], subject: str, room: str):
+        """Re-label a booked pull-out as a push-in under (subject, room)
+        and drop it from the pull-out counters. Call before changing the
+        entry itself -- its current subject/room are how it is found."""
+        student_id = entry["student_id"]
+        day = entry["day_of_week"]
+        span = (int(entry["start_minute"]), int(entry["end_minute"]))
+
+        for iv in self.teacher_intervals_on(entry.get("teacher") or "", day):
+            if (
+                iv["student_id"] == student_id
+                and (iv["start"], iv["end"]) == span
+                and (iv["subject"], iv["room"]) == (entry["subject"], entry["room"])
+            ):
+                iv["subject"], iv["room"], iv["delivery"] = subject, room, DELIVERY_PUSHIN
+
+        pullouts = self.pullout_intervals_by_student_day.get((student_id, day), [])
+        if span in pullouts:
+            pullouts.remove(span)
+        subject_key = (student_id, entry.get("block_subject", ""))
+        if self.pullouts_by_student_subject.get(subject_key, 0) > 0:
+            self.pullouts_by_student_subject[subject_key] -= 1
+
 
 # ===============================================================
 # Homerooms
@@ -553,7 +597,8 @@ def _score_candidate(
     say why. Pull-outs start from the block's pullout_score, then lose
     points for pulling from the same subject again, for other pull-outs
     that day and for splitting a block mid-way; joining an existing group
-    gains points (more if it is the same grade).
+    gains points (more if it is the same grade). ENL groups also gain
+    points for staying within one homeroom and lose some for mixing.
     """
     why: List[str] = []
 
@@ -589,6 +634,22 @@ def _score_candidate(
         same_grade = any(m["grade"] == grade for m in members)
         score += 250 if same_grade else 100
         why.append(f"joins an existing group of {len(members)}")
+
+        homeroom = schedule_index.student_homeroom.get(student_id)
+        if (
+            homeroom
+            and delivery == DELIVERY_PULLOUT
+            and service_type in PUSHIN_WHEN_SAME_HOMEROOM
+        ):
+            member_homerooms = {
+                schedule_index.student_homeroom.get(m["student_id"]) for m in members
+            }
+            if member_homerooms == {homeroom}:
+                score += SAME_HOMEROOM_GROUP_BONUS
+                why.append("everyone in the group shares a homeroom")
+            else:
+                score -= MIXED_HOMEROOM_GROUP_PENALTY
+                why.append("group mixes homerooms")
 
     return score, why
 
@@ -759,8 +820,7 @@ def place_mandated_services(
         sid = student["student_id"]
         grade = student_grade[sid]
         for service in get_student_services(student):
-            session_len = session_length_for_service(service["service_type"])
-            sessions_needed = max(1, math.ceil(service["minutes"] / session_len))
+            session_len, sessions_needed = service_session_plan(service)
             options = static_option_count(period_config, grade, service, session_len)
             requests.append({
                 "student": student,
@@ -875,6 +935,139 @@ def place_mandated_services(
     return entries, flags, report
 
 
+def _shortfall(report: List[Dict[str, Any]]) -> Tuple[int, int]:
+    """(sessions that couldn't be placed, requests with no session at all)."""
+    return (
+        sum(r["sessions_needed"] - r["sessions_scheduled"] for r in report),
+        sum(1 for r in report if r["sessions_scheduled"] == 0),
+    )
+
+
+def place_services_preferring_homeroom_groups(
+    students: List[Dict[str, Any]],
+    student_grade: Dict[str, str],
+    student_homeroom: Dict[str, str],
+    staff_members: List[Dict[str, Any]],
+    period_config: PeriodConfig,
+    schedule_index: ScheduleIndex,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], ScheduleIndex]:
+    """
+    Pipeline step 1, with ENL groups kept to one homeroom where that
+    costs nobody a session.
+
+    One-homeroom groups are small, so they use more of the ENL teachers'
+    time than mixed groups do, and on a tight staff that leaves other
+    students without ENL. So the services are first placed with no
+    homeroom preference -- that result is the bar. They are then placed
+    again with the preference on for every homeroom. While that leaves
+    more sessions unplaced (or more students with none of a service)
+    than the bar, the preference is dropped for the homeroom whose own
+    groups take up the most sessions and placement is rerun; its
+    students go back into mixed groups, which stay pull-outs. With every
+    homeroom dropped the result is the bar itself, so the preference can
+    never cost a session.
+
+    Each attempt works on a copy of schedule_index. Returns (entries,
+    flags, per-request report, the index of the attempt that was kept).
+    """
+    def attempt(homerooms: Set[str]):
+        index = copy.deepcopy(schedule_index)
+        index.student_homeroom = {
+            sid: homeroom for sid, homeroom in student_homeroom.items()
+            if homeroom in homerooms
+        }
+        entries, flags, report = place_mandated_services(
+            students, student_grade, student_homeroom, staff_members, period_config, index,
+        )
+        return entries, flags, report, index
+
+    baseline = attempt(set())
+    base_short, base_unserved = _shortfall(baseline[2])
+
+    homerooms = {homeroom for homeroom in student_homeroom.values() if homeroom}
+    while homerooms:
+        result = attempt(homerooms)
+        short, unserved = _shortfall(result[2])
+        if short <= base_short and unserved <= base_unserved:
+            return result
+
+        # Sessions each homeroom holds with a group all of its own.
+        groups: Dict[Tuple[Any, ...], Set[str]] = {}
+        for entry in result[0]:
+            if entry["service_type"] in PUSHIN_WHEN_SAME_HOMEROOM:
+                key = (
+                    entry["teacher"], entry["day_of_week"],
+                    entry["start_minute"], entry["end_minute"],
+                )
+                groups.setdefault(key, set()).add(student_homeroom.get(entry["student_id"], ""))
+        own_sessions = Counter(
+            next(iter(members)) for members in groups.values() if len(members) == 1
+        )
+        candidates = [h for h, _ in own_sessions.most_common() if h in homerooms]
+        if not candidates:
+            break
+        homerooms.discard(candidates[0])
+
+    return baseline
+
+
+def convert_same_homeroom_groups_to_pushin(
+    entries: List[Dict[str, Any]],
+    student_homeroom: Dict[str, str],
+    period_config: PeriodConfig,
+    schedule_index: ScheduleIndex,
+) -> int:
+    """
+    Pipeline step 1b: once every service is placed and the groups are
+    final, turn a pull-out group into a push-in when all of its students
+    (or its only student) sit in the same homeroom -- the provider goes
+    to that room instead of pulling the students out of it.
+
+    Only services in PUSHIN_WHEN_SAME_HOMEROOM (ENL for now), and only
+    sessions inside a block the service may push into; an I-Block session
+    stays a pull-out because the homeroom isn't together then.
+
+    Changes the entries in place and returns how many sessions (groups)
+    were converted.
+    """
+    groups: Dict[Tuple[Any, ...], List[Dict[str, Any]]] = {}
+    for entry in entries:
+        if (
+            entry["delivery"] == DELIVERY_PULLOUT
+            and entry["service_type"] in PUSHIN_WHEN_SAME_HOMEROOM
+        ):
+            key = (
+                entry["teacher"], entry["day_of_week"], entry["start_minute"],
+                entry["end_minute"], entry["subject"], entry["room"],
+            )
+            groups.setdefault(key, []).append(entry)
+
+    converted = 0
+    for group in groups.values():
+        homerooms = {student_homeroom.get(e["student_id"], "") for e in group}
+        if len(homerooms) != 1:
+            continue
+        homeroom = homerooms.pop()
+        if not homeroom:
+            continue
+        allowed_subjects = set(period_config.pushin_subjects_for(group[0]["service_type"]))
+        if any(e["block_subject"] not in allowed_subjects for e in group):
+            continue
+
+        for entry in group:
+            subject = pushin_subject_label(entry["subject"])
+            schedule_index.convert_pullout_to_pushin(entry, subject, homeroom)
+            entry.update({
+                "subject": subject,
+                "room": homeroom,
+                "delivery": DELIVERY_PUSHIN,
+                "is_pullout": False,
+            })
+        converted += 1
+
+    return converted
+
+
 def suggest_service_slots(
     entries: List[Dict[str, Any]],
     student: Dict[str, Any],
@@ -903,7 +1096,7 @@ def suggest_service_slots(
             continue
         index.add_entry(entry)
 
-    session_len = session_length_for_service(service["service_type"])
+    session_len, _ = service_session_plan(service)
     homeroom = str(student.get("homeroom") or "").strip()
     suggestions: List[Dict[str, Any]] = []
     for provider in qualified_providers(service["service_type"], staff_members):
@@ -1733,10 +1926,18 @@ def schedule_iep_services_first(
     if progress_callback:
         progress_callback(0, "Placing mandated IEP/ENL/related services")
 
-    service_entries, service_flags, placement_report = place_mandated_services(
+    (
+        service_entries, service_flags, placement_report, schedule_index,
+    ) = place_services_preferring_homeroom_groups(
         schedulable, student_grade, student_homeroom, staff_members,
         period_config, schedule_index,
     )
+    # 1b. ENL groups drawn from a single homeroom become push-ins.
+    pushin_conversions = convert_same_homeroom_groups_to_pushin(
+        service_entries, student_homeroom, period_config, schedule_index,
+    )
+    logger.info("Converted %s single-homeroom ENL session(s) to push-in", pushin_conversions)
+
     all_entries.extend(service_entries)
     compliance_flags.extend(service_flags)
 

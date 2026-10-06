@@ -1,6 +1,6 @@
 import { getStudents } from "./students";
 import { getStaff } from "./staff";
-import { getSchedule } from "./schedule";
+import { getScheduleRuns } from "./scheduleRuns";
 import { getComplianceFlags } from "./compliance";
 
 const STALE_MS = 60_000; // treat cached data as fresh for 60s
@@ -8,7 +8,10 @@ const STALE_MS = 60_000; // treat cached data as fresh for 60s
 type DashboardData = {
   students: any[];
   staff: any[];
-  schedule: any[];
+  // Generated schedules not yet published (from the run list).
+  draftScheduleCount: number;
+  // When the current published schedule was published, if any.
+  lastPublishedAt: string | null;
   flags: any[];
   fetchedAt: number;
 };
@@ -26,16 +29,22 @@ export async function loadDashboard(force = false): Promise<DashboardData> {
   if (inFlight) return inFlight; // dedupe concurrent calls
 
   inFlight = (async () => {
-    const [students, staff, schedule, flags] = await Promise.all([
+    const [students, staff, runs, flags] = await Promise.all([
       getStudents(),
       getStaff(),
-      getSchedule(),
+      getScheduleRuns(),
       getComplianceFlags(),
     ]);
     const data: DashboardData = {
       students: students || [],
       staff: staff || [],
-      schedule: schedule || [],
+      draftScheduleCount: (runs || []).filter((r) => r.status !== "published").length,
+      lastPublishedAt:
+        (runs || [])
+          .map((r) => r.published_at)
+          .filter((d): d is string => !!d)
+          .sort()
+          .at(-1) ?? null,
       flags: flags || [],
       fetchedAt: Date.now(),
     };

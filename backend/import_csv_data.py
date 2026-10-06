@@ -54,6 +54,8 @@ DEFAULT_SESSION_MINUTES = {
 
 # Pulls the session count out of frequency strings like "2x/week".
 FREQ_PATTERN = re.compile(r"(\d+)\s*x")
+# "daily" means once every school day.
+DAILY_SESSIONS_PER_WEEK = 5
 
 
 def yes_no(value):
@@ -322,11 +324,16 @@ def import_staff(db, school, csv_path: Optional[PathLike] = None) -> int:
 
 
 def _parse_sessions_per_week(frequency: str | None) -> int | None:
-    """"2x/week" -> 2. None when the frequency is missing or unparseable."""
+    """"2x/week" -> 2, "daily" -> 5. None when the frequency is missing
+    or unparseable."""
     if not frequency:
         return None
-    match = FREQ_PATTERN.search(frequency)
-    return int(match.group(1)) if match else None
+    match = FREQ_PATTERN.search(str(frequency))
+    if match:
+        return int(match.group(1))
+    if "daily" in str(frequency).lower():
+        return DAILY_SESSIONS_PER_WEEK
+    return None
 
 
 def import_student_services(db, school, csv_path):

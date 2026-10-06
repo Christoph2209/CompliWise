@@ -13,7 +13,8 @@ import "../components/Dashboard.css";
 export default function Dashboard() {
   const [students, setStudents] = useState<any[]>([]);
   const [staff, setStaff] = useState<any[]>([]);
-  const [schedule, setSchedule] = useState<any[]>([]);
+  const [draftScheduleCount, setDraftScheduleCount] = useState(0);
+  const [lastPublishedAt, setLastPublishedAt] = useState<string | null>(null);
   const [flags, setFlags] = useState<any[]>([]);
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -41,7 +42,8 @@ export default function Dashboard() {
     const data = await loadDashboard(force);
     setStudents(data.students);
     setStaff(data.staff);
-    setSchedule(data.schedule);
+    setDraftScheduleCount(data.draftScheduleCount);
+    setLastPublishedAt(data.lastPublishedAt);
     setFlags(data.flags);
   }
 
@@ -99,9 +101,13 @@ export default function Dashboard() {
             ⚙️ Generate Schedule
           </button>
           <button className="danger" onClick={async () => {
+            if (!window.confirm(
+              "Reset deletes every generated schedule, including published ones, " +
+              "plus their compliance flags and flex groups. Students and staff are kept.\n\nContinue?"
+            )) return;
             try {
-              await resetSchedule();
-              alert("Schedule reset successfully!");
+              const result = await resetSchedule();
+              alert(result?.message || "Schedules reset.");
               // Reset wipes the schedule for every run, so clear the whole
               // shared cache (StudentSchedules/TeacherSchedules included)
               // rather than just this page's own cached bundle.
@@ -127,8 +133,13 @@ export default function Dashboard() {
           <div className="kpi-value">{staff.length}</div>
         </div>
         <div className="kpi-card">
-          <div className="kpi-label">Schedule Entries</div>
-          <div className="kpi-value">{schedule.length}</div>
+          <div className="kpi-label">Draft Schedules</div>
+          <div className="kpi-value">{draftScheduleCount}</div>
+          <div className="kpi-sub">
+            {lastPublishedAt
+              ? `Published ${new Date(lastPublishedAt).toLocaleDateString()}`
+              : "None published yet"}
+          </div>
         </div>
         <div className="kpi-card alert">
           <div className="kpi-label">Critical Issues</div>

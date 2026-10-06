@@ -73,6 +73,13 @@ const icons = {
       <path d="M4 17l8 4 8-4" />
     </Icon>
   ),
+  import: (
+    <Icon>
+      <path d="M12 4v11" />
+      <path d="M7.5 10.5L12 15l4.5-4.5" />
+      <path d="M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2" />
+    </Icon>
+  ),
   menu: (
     <Icon>
       <line x1="4" y1="7" x2="20" y2="7" />
@@ -117,6 +124,7 @@ export default function AppLayout() {
     { to: "/teacher-schedules", label: "Teacher Schedules", icon: icons.schedules },
     { to: "/compliance", label: "Compliance", icon: icons.compliance, show: isAdminOrPrincipal },
     { to: "/flex_groups", label: "Flex Groups", icon: icons.flex },
+    { to: "/import", label: "Import Students", icon: icons.import, show: user?.role === "admin" },
   ];
 
   return (

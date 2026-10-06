@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { getSchedule, getStaffSchedule, type StaffScheduleEntry } from "../api/schedule";
 import { useAuth } from "../context/authContext";
 import StaffCalendar from "../components/StaffCalendar";
@@ -85,6 +85,78 @@ function firstSeen(studentEntries: any[]): number {
   return first;
 }
 
+/** Cycle day, then start time, then student name. */
+function byDayThenTime(a: any, b: any): number {
+  return (
+    DAYS.indexOf(a.day_of_week) - DAYS.indexOf(b.day_of_week) ||
+    (a.start_minute ?? 0) - (b.start_minute ?? 0) ||
+    String(a.student_name).localeCompare(String(b.student_name))
+  );
+}
+
+/** A panel listing service sessions (pull-outs or push-ins) one cycle
+ * day at a time, with a tab per day that has any. */
+function ServicePanel({
+  title,
+  emptyText,
+  sessions,
+}: {
+  title: string;
+  emptyText: ReactNode;
+  sessions: any[];
+}) {
+  const [day, setDay] = useState<string | null>(null);
+  const days = DAYS.filter((d) => sessions.some((s) => s.day_of_week === d));
+  // Falls back to the first day that has any.
+  const activeDay = day && days.includes(day) ? day : days[0];
+  const daySessions = sessions.filter((s) => s.day_of_week === activeDay);
+
+  return (
+    <aside className="panel" style={{ flex: "0 1 360px", height: "auto" }}>
+      <h2>
+        {title} ({sessions.length})
+      </h2>
+      {sessions.length === 0 ? (
+        <p>{emptyText}</p>
+      ) : (
+        <>
+          <div className="day-tabs">
+            {days.map((d) => (
+              <button
+                key={d}
+                className={d === activeDay ? "active" : ""}
+                onClick={() => setDay(d)}
+                title={dayLabel(d)}
+              >
+                {d} ({sessions.filter((s) => s.day_of_week === d).length})
+              </button>
+            ))}
+          </div>
+          <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+            {daySessions.map((s, i) => (
+              <li
+                key={s.id}
+                style={{
+                  padding: "6px 0",
+                  borderTop: i === 0 ? "none" : "1px solid var(--border)",
+                  fontSize: 14,
+                }}
+              >
+                <div>
+                  <strong>{s.student_name}</strong> · {s.time_range}
+                </div>
+                <div style={{ color: "var(--text)" }}>
+                  {s.subject} with {s.staff_name || "no provider assigned"}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </aside>
+  );
+}
+
 export default function TeacherDashboard() {
   const { user } = useAuth();
   const [rows, setRows] = useState<StaffScheduleEntry[]>([]);
@@ -143,13 +215,11 @@ export default function TeacherDashboard() {
         rosterIds.has(e.student_id) &&
         (e.delivery === "pullout" || (e.delivery == null && e.is_pullout))
     )
-    .sort(
-      (a, b) =>
-        DAYS.indexOf(a.day_of_week) - DAYS.indexOf(b.day_of_week) ||
-        (a.start_minute ?? 0) - (b.start_minute ?? 0) ||
-        String(a.student_name).localeCompare(String(b.student_name))
-    );
-  const pulloutDays = DAYS.filter((day) => pullouts.some((p) => p.day_of_week === day));
+    .sort(byDayThenTime);
+  // Same for push-ins: a provider joining the class to work with a student.
+  const pushins = entries
+    .filter((e) => rosterIds.has(e.student_id) && e.delivery === "push_in")
+    .sort(byDayThenTime);
 
   if (loading) {
     return (
@@ -174,8 +244,8 @@ export default function TeacherDashboard() {
         )}
       </section>
 
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 24, alignItems: "flex-start" }}>
-      <section style={{ flex: "1 1 480px", minWidth: 0 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 48, alignItems: "flex-start" }}>
+      <section style={{ flex: "0 1 auto", minWidth: 0 }}>
         <h2>My Class Roster ({roster.length})</h2>
         {roster.length === 0 ? (
           <p>No students currently assigned to your schedule.</p>
@@ -205,35 +275,17 @@ export default function TeacherDashboard() {
         )}
       </section>
 
-      <aside className="panel" style={{ flex: "0 0 320px", height: "auto" }}>
-        <h2>Pull outs ({pullouts.length})</h2>
-        {pullouts.length === 0 ? (
-          <p>None of your students are pulled out.</p>
-        ) : (
-          pulloutDays.map((day) => (
-            <div key={day} style={{ marginBottom: 14 }}>
-              <strong>{dayLabel(day)}</strong>
-              <ul style={{ listStyle: "none", margin: "6px 0 0", padding: 0 }}>
-                {pullouts
-                  .filter((p) => p.day_of_week === day)
-                  .map((p) => (
-                    <li
-                      key={p.id}
-                      style={{ padding: "6px 0", borderTop: "1px solid var(--border)", fontSize: 14 }}
-                    >
-                      <div>
-                        <strong>{p.student_name}</strong> · {p.time_range}
-                      </div>
-                      <div style={{ color: "var(--text)" }}>
-                        {p.subject} with {p.staff_name || "no provider assigned"}
-                      </div>
-                    </li>
-                  ))}
-              </ul>
-            </div>
-          ))
-        )}
-      </aside>
+      <ServicePanel
+        title="Pull outs"
+        emptyText="None of your students are pulled out."
+        sessions={pullouts}
+      />
+
+      <ServicePanel
+        title="Push ins"
+        emptyText="No providers push in for your students."
+        sessions={pushins}
+      />
       </div>
     </div>
   );
