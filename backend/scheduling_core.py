@@ -28,6 +28,7 @@ Each block's SUBJECT maps to a BlockPolicy that says:
 """
 
 import math
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -102,6 +103,35 @@ def canonical_service_type(service_type: Optional[str]) -> Optional[str]:
     if not service_type:
         return service_type
     return SERVICE_TYPE_ALIASES.get(str(service_type).strip().lower(), service_type)
+
+
+# Supports recorded on the student but not placed session by session.
+# A special class ("12:1+1", "12:1": students per teacher, plus
+# paraprofessionals) is where the student sits for a subject, and a
+# teaching assistant stays with the student all day. The engine doesn't
+# build special-class sections yet, so get_student_services() leaves
+# these out instead of reporting them as sessions nobody can deliver.
+TEACHING_ASSISTANT = "Teaching Assistant"
+_SPECIAL_CLASS_RE = re.compile(r"\d+:\d+(\+\d+)?")
+
+
+def is_unscheduled_support(service_type: Optional[str]) -> bool:
+    """True for a special-class placement or a teaching assistant."""
+    text = str(service_type or "").strip()
+    return text == TEACHING_ASSISTANT or bool(_SPECIAL_CLASS_RE.fullmatch(text))
+
+
+# Services delivered inside the student's own class and never by taking
+# the student out of it: in ICT a second teacher co-teaches the class.
+PUSH_IN_ONLY_SERVICES = {"ICT"}
+
+
+def service_is_pullout(service_type: Optional[str], is_pullout: Any = True) -> bool:
+    """Whether a service takes the student out of class. Always False for
+    a push-in-only service, whatever the stored flag says."""
+    if str(service_type or "").strip() in PUSH_IN_ONLY_SERVICES:
+        return False
+    return bool(is_pullout)
 
 
 SERVICE_SESSION_LENGTH_MINUTES = {
@@ -793,12 +823,14 @@ def get_student_services(student: Dict[str, Any]) -> List[Dict[str, Any]]:
     if db_services:
         for service in db_services:
             service_type = canonical_service_type(service.get("service_type")) or RESOURCE_ROOM
+            if is_unscheduled_support(service_type):
+                continue
             services.append({
                 "subject": canonical_service_type(service.get("subject")) or service_type,
                 "service_type": service_type,
                 "minutes": int(service.get("minutes") or service.get("minutes_per_week") or 30),
                 "sessions_per_week": service.get("sessions_per_week"),
-                "is_pullout": bool(service.get("is_pullout", True)),
+                "is_pullout": service_is_pullout(service_type, service.get("is_pullout", True)),
                 "subject_area": service.get("subject_area"),
             })
     elif student.get("has_iep"):

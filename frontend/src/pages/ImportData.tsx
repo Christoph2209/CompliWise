@@ -140,26 +140,26 @@ export default function ImportData() {
       <section className="panel" style={{ height: "auto", marginBottom: 16, maxWidth: 720 }}>
         <h2>Choose a file</h2>
         <p style={{ margin: "0 0 14px", fontSize: 14, color: "var(--text)" }}>
-          Upload a CSV to add more students. Students already on file (matched by student ID) are
+          Upload a CSV or Excel (.xlsx) file to add more students. Students already on file (matched by student ID) are
           updated, not duplicated, and nobody is removed. The file is checked first; nothing is
           saved until you choose Import.
         </p>
 
         <div key={formKey} style={{ display: "grid", gap: 14, marginBottom: 16 }}>
           <label style={{ display: "grid", gap: 6, fontSize: 14, fontWeight: 600 }}>
-            Students CSV
+            Students file (CSV or Excel)
             <input
               type="file"
-              accept=".csv"
+              accept=".csv,.xlsx"
               disabled={busy !== null}
               onChange={(e) => pickFile(setStudentsFile, e.target.files?.[0] ?? null)}
             />
           </label>
           <label style={{ display: "grid", gap: 6, fontSize: 14, fontWeight: 600 }}>
-            Staff CSV (optional)
+            Staff file (CSV or Excel, optional)
             <input
               type="file"
-              accept=".csv"
+              accept=".csv,.xlsx"
               disabled={busy !== null}
               onChange={(e) => pickFile(setStaffFile, e.target.files?.[0] ?? null)}
             />

@@ -7,8 +7,10 @@ argon2-cffi-bindings==25.1.0
 cffi==2.0.0
 click==8.4.1
 colorama==0.4.6
+defusedxml==0.7.1
 dnspython==2.8.0
 email-validator==2.3.0
+et_xmlfile==2.0.0
 fastapi==0.136.3
 greenlet==3.5.1
 h11==0.16.0
@@ -25,6 +27,7 @@ pydantic_core==2.46.4
 python-dotenv==1.2.2
 python-multipart==0.0.32
 PyYAML==6.0.3
+openpyxl==3.1.5
 SQLAlchemy==2.0.50
 starlette==1.2.1
 typing-inspection==0.4.2

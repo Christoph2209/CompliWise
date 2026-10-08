@@ -1,7 +1,7 @@
 """
 import_validation.py
 
-Checks student and staff CSVs row by row BEFORE anything is written, so
+Checks student and staff files (CSV or Excel) row by row BEFORE anything is written, so
 a school sees every problem in its file up front instead of discovering
 half-imported data later. Nothing here touches the database except
 read-only lookups to report which rows are new and which update an
@@ -19,7 +19,6 @@ a file that passes validation imports exactly as previewed.
 
 from __future__ import annotations
 
-import csv
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,11 +26,18 @@ from typing import Iterable, Optional
 
 from dmscheduler_db import StaffMember, Student
 from import_csv_data import DEFAULT_SESSION_MINUTES, FREQ_PATTERN
+from roster_file import (
+    ENL_WEEKLY_MINUTES,
+    RosterFileError,
+    read_table,
+    roster_enl_level,
+    roster_services,
+)
 from scheduling_core import canonical_service_type
 
 # Same aliases import_csv_data.py accepts, first match wins.
-STUDENT_ID_COLUMNS = ("student_id", "id", "external_student_id")
-STAFF_ID_COLUMNS = ("staff_id", "worker_id", "id", "external_staff_id")
+STUDENT_ID_COLUMNS = ("student_id", "Student ID", "id", "external_student_id")
+STAFF_ID_COLUMNS = ("staff_id", "Staff ID", "worker_id", "id", "external_staff_id")
 FIRST_NAME_COLUMNS = ("first_name", "First Name")
 LAST_NAME_COLUMNS = ("last_name", "Last Name")
 
@@ -39,14 +45,12 @@ YES_NO_VALUES = {"yes", "y", "true", "1", "t", "no", "n", "false", "0", "f", ""}
 VALID_GRADES = {"PK", "K", *(str(n) for n in range(0, 13))}
 VALID_MTSS = {"", "1", "2", "3", "tier_1", "tier_2", "tier_3", "tier 1", "tier 2", "tier 3"}
 
-MAX_ROWS = 20_000  # far beyond any single school; guards against huge uploads
-
 
 @dataclass
 class Issue:
     """One problem found in an uploaded file."""
 
-    row: Optional[int]  # spreadsheet row number (header = row 1); None = whole file
+    row: Optional[int]  # spreadsheet row number (a CSV's header = row 1); None = whole file
     severity: str       # "error" | "warning"
     field: Optional[str]
     message: str
@@ -109,29 +113,18 @@ def _has_any_column(headers: list[str], columns: Iterable[str]) -> bool:
     return any(c in headers for c in columns)
 
 
-def _read_rows(path: Path, report: FileReport) -> tuple[list[str], list[dict]]:
+def _read_rows(path: Path, report: FileReport) -> tuple[list[str], list[tuple[int, dict]]]:
     """
-    Read the CSV into (headers, rows) with header names stripped. Encoding,
-    CSV-format and size problems are added to `report` as file-level errors
-    and return empty rows.
+    Read the CSV or workbook into (headers, rows), each row paired with
+    its spreadsheet row number. A file that can't be read (encoding,
+    format, size) is added to `report` as a file-level error and returns
+    empty rows.
     """
     try:
-        with path.open("r", encoding="utf-8-sig", newline="") as f:
-            reader = csv.DictReader(f)
-            headers = [h.strip() for h in (reader.fieldnames or [])]
-            rows = []
-            for row in reader:
-                rows.append({(k or "").strip(): v for k, v in row.items()})
-                if len(rows) > MAX_ROWS:
-                    report.add(None, "error", None, f"File has more than {MAX_ROWS:,} rows.")
-                    return headers, []
-            return headers, rows
-    except UnicodeDecodeError:
-        report.add(None, "error", None,
-                   "File isn't UTF-8 text. In Excel, use Save As > 'CSV UTF-8 (Comma delimited)'.")
-    except csv.Error as error:
-        report.add(None, "error", None, f"Couldn't read the file as CSV: {error}")
-    return [], []
+        return read_table(path)
+    except RosterFileError as error:
+        report.add(None, "error", None, str(error))
+        return [], []
 
 
 def _check_required_headers(headers, report, id_columns, kind):
@@ -164,10 +157,10 @@ def _check_yes_no(row, row_num, report, columns, field_name):
 
 def validate_students_csv(db, school_id, path: Path) -> FileReport:
     """
-    Check a students CSV for this school. Errors: missing/duplicate IDs,
+    Check a students file for this school. Errors: missing/duplicate IDs,
     missing names, bad ENL minutes, unreadable iep_services. Warnings:
     unrecognized grade, MTSS tier or yes/no values, and service entries
-    that will import with assumed defaults.
+    or roster cells that will import with assumed defaults.
     """
     report = FileReport(file="students")
     headers, rows = _read_rows(path, report)
@@ -179,10 +172,10 @@ def validate_students_csv(db, school_id, path: Path) -> FileReport:
         .filter(Student.school_id == school_id, Student.external_student_id.isnot(None))
     }
     seen: dict[str, int] = {}
+    assumed = {"placeholder_minutes": 0, "enl_minutes": 0}
 
-    for index, row in enumerate(rows):
-        row_num = index + 2
-        if not any((v or "").strip() for v in row.values()):
+    for row_num, row in rows:
+        if not any(str(v or "").strip() for v in row.values()):
             continue  # blank line
         report.rows_read += 1
 
@@ -225,10 +218,44 @@ def validate_students_csv(db, school_id, path: Path) -> FileReport:
                            f"ENL minutes must be a number of 0 or more (got '{enl_minutes}').")
 
         _validate_services(row, row_num, report)
+        _validate_roster_columns(row, row_num, report, assumed, bool(enl_minutes))
+
+    # Assumptions that apply to many rows are reported once, not per row.
+    if assumed["placeholder_minutes"]:
+        report.add(None, "warning", "iep_services",
+                   f"{assumed['placeholder_minutes']} service(s) list how often but not how long "
+                   "(e.g. '5Xweek'). They will import with a placeholder session length, marked "
+                   "NEEDS VERIFICATION.")
+    if assumed["enl_minutes"]:
+        report.add(None, "warning", "enl_minutes_required",
+                   f"{assumed['enl_minutes']} student(s) have an ENL level but no ENL minutes. "
+                   "Weekly minutes will be set from the level (CR Part 154: Entering/Emerging 360, "
+                   "Transitioning/Expanding 180, Commanding 90); confirm them.")
 
     if report.rows_read == 0 and report.error_count == 0:
         report.add(None, "error", None, "The students file has a header but no student rows.")
     return report
+
+
+def _validate_roster_columns(row, row_num, report, assumed, has_enl_minutes):
+    """Check the compliance-roster columns (placements, related services, ENL level) of one student row."""
+    services, warnings = roster_services(row)
+    report.services_found += len(services)
+    for field_name, message in warnings:
+        report.add(row_num, "warning", field_name, message)
+    assumed["placeholder_minutes"] += sum(
+        1 for svc in services
+        if svc.get("sessions_per_week") and not svc.get("minutes_per_session")
+    )
+
+    level = roster_enl_level(row)
+    if not level:
+        return
+    if level not in ENL_WEEKLY_MINUTES:
+        report.add(row_num, "warning", "enl_level",
+                   f"ENL level '{level}' isn't recognized; no ENL minutes will be set.")
+    elif not has_enl_minutes:
+        assumed["enl_minutes"] += 1
 
 
 def _validate_services(row, row_num, report):
@@ -271,7 +298,7 @@ def _validate_services(row, row_num, report):
 
 def validate_staff_csv(db, school_id, path: Path) -> FileReport:
     """
-    Check a staff CSV for this school. Errors: missing/duplicate IDs and
+    Check a staff file for this school. Errors: missing/duplicate IDs and
     missing names. Warnings: unrecognized yes/no values in the certification
     columns and invalid group sizes.
     """
@@ -286,9 +313,8 @@ def validate_staff_csv(db, school_id, path: Path) -> FileReport:
     }
     seen: dict[str, int] = {}
 
-    for index, row in enumerate(rows):
-        row_num = index + 2
-        if not any((v or "").strip() for v in row.values()):
+    for row_num, row in rows:
+        if not any(str(v or "").strip() for v in row.values()):
             continue
         report.rows_read += 1
 

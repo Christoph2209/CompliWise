@@ -52,7 +52,8 @@ backend/
   compliance.py         compliance checks run on a finished schedule
   database_service.py   saves/loads scheduler data
   dmscheduler_db.py     database models
-  import_csv_data.py    CSV import
+  import_csv_data.py    CSV / Excel import
+  roster_file.py        Reads CSV and .xlsx files; compliance-roster columns
   import_validation.py  CSV checks run before importing
   setup.py              first-run setup (migrations, first admin)
   alembic/              database migrations
@@ -188,10 +189,12 @@ Every request only sees data from the user's own school.
 
 ### 1. Load data
 
-Import students and staff from CSV in the setup wizard or, for an admin, any time afterwards from the **Import Students** page. Each file is checked row by row first; a file with errors is refused as a whole, and the report lists every problem.
+Import students and staff from CSV or Excel (.xlsx) files in the setup wizard or, for an admin, any time afterwards from the **Import Students** page. Each file is checked row by row first; a file with errors is refused as a whole, and the report lists every problem.
 
 - **Students:** ID, name, grade, homeroom, IEP status, ENL level/minutes, MTSS tier, and IEP services (`iep_services`, a JSON list).
 - **Staff:** ID, name, title, grade, homeroom, and certifications (SPED, ENL, SLP, Resource Room).
+
+A students file can also be a **compliance roster** workbook: one row per student, a placement column per core subject (`Gen Education`, `ICT`, `12:1+1`, `Special class 12:1`) and a column per service (`Speech`, `OT`, `Counseling`, `Teaching assistant`, `ENL`, `Resource room`) with cells like `2X30 group of 3`. Placements and services become IEP services on the student, the IEP flag is inferred from them, and ENL minutes are set from the ENL level. Special-class placements and teaching assistants are recorded but not scheduled yet.
 
 > IEP minutes imported from CSV are placeholders, since exports only carry a frequency such as "2x/week". Each imported service is marked **NEEDS VERIFICATION**; check them against the IEP paperwork.
 
