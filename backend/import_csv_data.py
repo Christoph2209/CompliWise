@@ -23,7 +23,7 @@ import uuid
 from pathlib import Path
 from typing import Optional, Union
 
-from dmscheduler_db import (
+from compliwise_db import (
     SessionLocal,
     School,
     Student,

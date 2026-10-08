@@ -18,7 +18,7 @@ import logging
 import uuid
 from typing import Any, Dict, List
 
-from dmscheduler_db import (
+from compliwise_db import (
     SessionLocal,
     School,
     Student,

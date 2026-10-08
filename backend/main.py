@@ -55,7 +55,7 @@ from database_service import (
     get_staff,
     get_students,
 )
-from dmscheduler_db import (
+from compliwise_db import (
     ComplianceFlag,
     FlexGroup,
     FlexGroupStudent,
