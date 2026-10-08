@@ -51,9 +51,10 @@ backend/
   scheduling_core.py    master schedule (PeriodConfig) and shared constants
   compliance.py         compliance checks run on a finished schedule
   database_service.py   saves/loads scheduler data
-  dmscheduler_db.py     database models
   import_csv_data.py    CSV / Excel import
   roster_file.py        Reads CSV and .xlsx files; compliance-roster columns
+  compliwise_db.py     database models
+  import_csv_data.py    CSV import
   import_validation.py  CSV checks run before importing
   setup.py              first-run setup (migrations, first admin)
   alembic/              database migrations

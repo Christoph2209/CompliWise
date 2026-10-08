@@ -37,7 +37,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from auth_utils import hash_password
-from dmscheduler_db import School, User
+from compliwise_db import School, User
 
 BACKEND_DIR = Path(__file__).resolve().parent
 ALEMBIC_INI_PATH = BACKEND_DIR / "alembic.ini"

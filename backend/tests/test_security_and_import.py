@@ -20,8 +20,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import main  # noqa: E402
 from auth_utils import hash_password  # noqa: E402
-from dmscheduler_db import SessionLocal, School, Student, StudentService, User  # noqa: E402
 from scheduling_core import get_student_services  # noqa: E402
+from compliwise_db import SessionLocal, School, Student, StudentService, User  # noqa: E402
 
 DATA = BACKEND.parent / "data"
 STUDENTS_CSV = (DATA / "Student_export_base.csv").read_bytes()

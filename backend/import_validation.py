@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional
 
-from dmscheduler_db import StaffMember, Student
+from compliwise_db import StaffMember, Student
 from import_csv_data import DEFAULT_SESSION_MINUTES, FREQ_PATTERN
 from roster_file import (
     ENL_WEEKLY_MINUTES,
