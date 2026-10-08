@@ -23,8 +23,8 @@ from auth_utils import hash_password  # noqa: E402
 from dmscheduler_db import SessionLocal, School, Student, StudentService, User  # noqa: E402
 
 DATA = BACKEND.parent / "data"
-STUDENTS_CSV = (DATA / "Student_export.csv").read_bytes()
-STAFF_CSV = (DATA / "StaffMember_export.csv").read_bytes()
+STUDENTS_CSV = (DATA / "Student_export_base.csv").read_bytes()
+STAFF_CSV = (DATA / "StaffMember_base.csv").read_bytes()
 
 
 def _client():
