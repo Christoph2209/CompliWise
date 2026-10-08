@@ -70,10 +70,11 @@ from compliwise_db import (
     User,
     AuditLog,
 )
-from import_csv_data import import_student_services, import_students, import_staff
+from import_csv_data import detect_file_kind, import_student_services, import_students, import_staff
 from import_validation import validate_staff_csv, validate_students_csv, summarize_errors
+from roster_file import RosterFileError
 from scheduler import schedule_iep_services_first, suggest_service_slots
-from scheduling_core import PeriodConfig, day_index, format_range
+from scheduling_core import PeriodConfig, day_index, format_range, service_is_pullout
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -541,17 +542,49 @@ def initialize_setup(payload: SetupInitializeRequest, request: Request, db: Sess
 
 
 # ---------------------------------------------------------------------------
-# CSV import: preview (validate only) and commit
+# CSV / Excel import: preview (validate only) and commit 
 # ---------------------------------------------------------------------------
 
 def _save_upload(upload: UploadFile | None, folder: str, name: str) -> Path | None:
-    """Write an uploaded file into `folder`; None when nothing was uploaded."""
+    """Write an uploaded file into `folder`; None when nothing was uploaded.
+    `name` is only a label: the importer tells CSV from Excel by content."""
     if upload is None:
         return None
     path = Path(folder) / name
     with path.open("wb") as f:
         shutil.copyfileobj(upload.file, f)
     return path
+
+
+def _save_unlabelled_uploads(uploads, folder: str, students_path, staff_path):
+    """
+    Save files uploaded without saying whether they hold students or
+    staff, and work that out from each file's columns. Returns the
+    (students_path, staff_path) pair with those files filled in.
+    """
+    for index, upload in enumerate(uploads or []):
+        path = _save_upload(upload, folder, f"upload{index}")
+        name = upload.filename or "The file"
+        try:
+            kind = detect_file_kind(path)
+        except RosterFileError as error:
+            raise HTTPException(status_code=422, detail=f"{name}: {error}")
+        if kind is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Can't tell whether {name} holds students or staff. "
+                       "It needs a Student ID or a Staff ID column.",
+            )
+        if (students_path if kind == "students" else staff_path) is not None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Two {kind} files were uploaded. Upload one students file and one staff file at most.",
+            )
+        if kind == "students":
+            students_path = path
+        else:
+            staff_path = path
+    return students_path, staff_path
 
 
 def _validate_uploads(db: Session, school_id, students_path, staff_path):
@@ -653,6 +686,7 @@ def setup_import_csv(
     request: Request,
     students_file: UploadFile | None = File(None),
     staff_file: UploadFile | None = File(None),
+    files: list[UploadFile] | None = File(None),
     user: User = Depends(require_roles(*ADMIN)),
     db: Session = Depends(get_db),
 ):
@@ -661,10 +695,15 @@ def setup_import_csv(
     in, so this is an ordinary admin-only request. Same validation as
     /import/commit, but errors come back as one string because the
     wizard shows `detail` as text.
+
+    The wizard sends each file (.csv or .xlsx) as `files`, and whether it
+    holds students or staff is read from its columns. students_file and
+    staff_file still work for callers that say which is which.
     """
     with tempfile.TemporaryDirectory() as tmpdir:
         students_path = _save_upload(students_file, tmpdir, "students.csv")
         staff_path = _save_upload(staff_file, tmpdir, "staff.csv")
+        students_path, staff_path = _save_unlabelled_uploads(files, tmpdir, students_path, staff_path)
         if not students_path and not staff_path:
             return {"students_imported": 0, "staff_imported": 0}
 
@@ -1039,7 +1078,7 @@ def create_student_service(
             subject_area=payload.subject_area,
             minutes_per_week=payload.minutes_per_week,
             sessions_per_week=payload.sessions_per_week,
-            is_pullout=payload.is_pullout,
+            is_pullout=service_is_pullout(payload.service_type, payload.is_pullout),
             preferred_provider_id=payload.preferred_provider_id,
             notes=payload.notes,
         )

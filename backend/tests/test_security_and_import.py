@@ -20,11 +20,14 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import main  # noqa: E402
 from auth_utils import hash_password  # noqa: E402
+from scheduling_core import get_student_services  # noqa: E402
 from compliwise_db import SessionLocal, School, Student, StudentService, User  # noqa: E402
 
 DATA = BACKEND.parent / "data"
 STUDENTS_CSV = (DATA / "Student_export_base.csv").read_bytes()
 STAFF_CSV = (DATA / "StaffMember_base.csv").read_bytes()
+ROSTER_XLSX = (DATA / "Middle_School_Compliance_Roster_v3.xlsx").read_bytes()
+XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def _client():
@@ -193,6 +196,94 @@ def test_bad_csv_is_refused_with_row_numbers():
     assert "missing required column" in r.json()["files"][0]["issues"][0]["message"]
 
 
+def test_compliance_roster_workbook_import():
+    school, users = _make_school_with_users("Iota School")
+    admin = _login(_client(), users["admin"], "pw12345678")
+
+    def roster():
+        return {"students_file": ("roster.xlsx", io.BytesIO(ROSTER_XLSX), XLSX_TYPE)}
+
+    r = admin.post("/import/preview", files=roster())
+    assert r.status_code == 200, r.text
+    report = r.json()["files"][0]
+    assert r.json()["can_import"] is True
+    assert (report["rows_read"], report["new_records"], report["services_found"]) == (240, 240, 340)
+    # Blank placement cells are reported against the workbook's own row numbers.
+    assert {i["row"] for i in report["issues"] if i["row"]} == {34, 194, 195}
+
+    r = admin.post("/import/commit", files=roster())
+    assert r.status_code == 200, r.text
+    assert (r.json()["students_imported"], r.json()["services_imported"]) == (240, 340)
+
+    students = {s["student_id"]: s for s in admin.get("/students").json()["students"]}
+
+    def services_of(student_id):
+        return {(s["service_type"], s["subject_area"]): s for s in students[student_id]["iep_services"]}
+
+    # MS1001: ICT in all four subjects, "2X30 group of3" Speech, "1X30 group3"
+    # Counseling, ENL "Transitioning".
+    first = students["MS1001"]
+    assert first["grade"] == "6" and first["has_iep"] is True
+    assert (first["enl_level"], first["enl_minutes_required"]) == ("transitioning", 180)
+    services = services_of("MS1001")
+    assert set(services) == {
+        ("ICT", "ELA"), ("ICT", "Math"), ("ICT", "Science"), ("ICT", "Social Studies"),
+        ("Speech", None), ("Counseling", None),
+    }
+    speech = services[("Speech", None)]
+    assert (speech["sessions_per_week"], speech["minutes_per_week"]) == (2, 60)
+    assert speech["notes"] == "Group size: 3"  # real minutes, so no verification warning
+    assert services[("ICT", "ELA")]["is_pullout"] is False
+
+    # "5Xweek" has no session length, so it keeps the placeholder warning.
+    assert "NEEDS VERIFICATION" in services_of("MS1004")[("Resource Room", None)]["notes"]
+    # All Gen Education, no services: not an IEP student.
+    assert students["MS1006"]["has_iep"] is False and students["MS1006"]["iep_services"] == []
+    # Special classes are recorded per subject but aren't sessions to schedule.
+    assert ("12:1+1", "ELA") in services_of("MS1020")
+    assert ("12:1", "ELA") in services_of("MS1228")
+    scheduled = {s["service_type"] for s in get_student_services(students["MS1020"])}
+    # ICT is co-teaching in the student's class, never a pull-out, even
+    # when a stored row says otherwise.
+    ict = get_student_services({"services": [{"service_type": "ICT", "minutes": 150, "is_pullout": True}]})
+    assert ict[0]["is_pullout"] is False
+    assert "12:1+1" not in scheduled and "Speech" in scheduled
+
+    # Re-importing the workbook duplicates nothing.
+    r = admin.post("/import/commit", files=roster())
+    assert r.json()["services_imported"] == 0
+    db = SessionLocal()
+    assert db.query(Student).filter(Student.school_id == school).count() == 240
+    assert db.query(StudentService).filter(StudentService.school_id == school).count() == 340
+    db.close()
+
+
+def test_setup_import_takes_a_single_unlabelled_file():
+    school, users = _make_school_with_users("Kappa School")
+    admin = _login(_client(), users["admin"], "pw12345678")
+
+    # One workbook, not labelled students or staff: its columns decide.
+    r = admin.post("/setup/import-csv", files=[("files", ("roster.xlsx", io.BytesIO(ROSTER_XLSX), XLSX_TYPE))])
+    assert r.status_code == 200, r.text
+    assert (r.json()["students_imported"], r.json()["staff_imported"]) == (240, 0)
+
+    # Two files in either order, one of each kind.
+    r = admin.post("/setup/import-csv", files=[
+        ("files", ("staff.csv", io.BytesIO(STAFF_CSV), "text/csv")),
+        ("files", ("students.csv", io.BytesIO(STUDENTS_CSV), "text/csv")),
+    ])
+    assert r.status_code == 200, r.text
+    assert r.json()["students_imported"] == 300 and r.json()["staff_imported"] > 0
+
+    r = admin.post("/setup/import-csv", files=[("files", ("x.csv", io.BytesIO(b"name,grade\nAna,3\n"), "text/csv"))])
+    assert r.status_code == 422 and "students or staff" in r.json()["detail"]
+    r = admin.post("/setup/import-csv", files=[
+        ("files", ("a.xlsx", io.BytesIO(ROSTER_XLSX), XLSX_TYPE)),
+        ("files", ("b.csv", io.BytesIO(STUDENTS_CSV), "text/csv")),
+    ])
+    assert r.status_code == 422 and "Two students files" in r.json()["detail"]
+
+
 def test_schedule_generation_stays_inside_one_school():
     school_a, users_a = _make_school_with_users("Delta School")
     _, users_b = _make_school_with_users("Epsilon School")
@@ -223,6 +314,15 @@ def test_schedule_generation_stays_inside_one_school():
 
     def is_service(e):
         return is_pullout(e) or e["delivery"] == "push_in"
+
+    # The demo CSV has ICT services; none may be scheduled as a pull-out.
+    assert not any(e["service_type"] == "ICT" and is_pullout(e) for e in all_entries)
+    db = SessionLocal()
+    assert db.query(StudentService).filter(
+        StudentService.school_id == school_a, StudentService.service_type == "ICT",
+        StudentService.is_pullout.is_(False),
+    ).count() > 0
+    db.close()
 
     pullout = next(
         p for p in all_entries

@@ -62,9 +62,10 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   const [adminPassword, setAdminPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 
-  // CSV step fields
-  const [studentsFile, setStudentsFile] = useState<File | null>(null);
-  const [staffFile, setStaffFile] = useState<File | null>(null);
+  // CSV step fields. Either file can hold students or staff; the server
+  // tells which from its columns.
+  const [firstFile, setFirstFile] = useState<File | null>(null);
+  const [secondFile, setSecondFile] = useState<File | null>(null);
   const [importSummary, setImportSummary] = useState<{ students_imported: number; staff_imported: number } | null>(null);
 
   // No setState here -- just fetches and returns/throws. Both the mount
@@ -167,7 +168,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     event.preventDefault();
     setError(null);
 
-    if (!studentsFile && !staffFile) {
+    if (!firstFile && !secondFile) {
       setStep("done");
       return;
     }
@@ -175,8 +176,8 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     setSubmitting(true);
     try {
       const form = new FormData();
-      if (studentsFile) form.append("students_file", studentsFile);
-      if (staffFile) form.append("staff_file", staffFile);
+      if (firstFile) form.append("files", firstFile);
+      if (secondFile) form.append("files", secondFile);
 
       const { data } = await api.post("/setup/import-csv", form, {
         headers: { "Content-Type": "multipart/form-data" },
@@ -184,7 +185,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
       setImportSummary(data);
       setStep("done");
     } catch (err: any) {
-      setError(err?.response?.data?.detail ?? "Import failed. You can skip this and import the CSVs later.");
+      setError(err?.response?.data?.detail ?? "Import failed. You can skip this and import your files later.");
     } finally {
       setSubmitting(false);
     }
@@ -294,23 +295,27 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
           {step === "csv" && (
             <form className="setup-wizard__state" onSubmit={handleCsvSubmit}>
               <h1>Import starter data</h1>
-              <p>Optional — you can also do this later from the app.</p>
+              <p>
+                Optional — you can also do this later from the app. One file is enough: upload your
+                student roster or your staff list as a .csv or .xlsx, and CompliWise works out
+                which it is from its columns.
+              </p>
 
               <label className="setup-wizard__field">
-                <span>Students CSV</span>
+                <span>Students or staff file (CSV or Excel)</span>
                 <input
                   type="file"
-                  accept=".csv"
-                  onChange={(e) => setStudentsFile(e.target.files?.[0] ?? null)}
+                  accept=".csv,.xlsx"
+                  onChange={(e) => setFirstFile(e.target.files?.[0] ?? null)}
                 />
               </label>
 
               <label className="setup-wizard__field">
-                <span>Staff CSV</span>
+                <span>Second file, if you have both (optional)</span>
                 <input
                   type="file"
-                  accept=".csv"
-                  onChange={(e) => setStaffFile(e.target.files?.[0] ?? null)}
+                  accept=".csv,.xlsx"
+                  onChange={(e) => setSecondFile(e.target.files?.[0] ?? null)}
                 />
               </label>
 
@@ -341,7 +346,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                   {importSummary.staff_imported} staff records.
                 </p>
               ) : (
-                <p>You can import student and staff CSVs any time from the app.</p>
+                <p>You can import student and staff files any time from the app.</p>
               )}
               <button type="button" className="setup-wizard__btn" onClick={onComplete}>
                 Go to login
