@@ -34,9 +34,7 @@ from scheduling_core import (
     format_minute,
     format_range,
     MAX_GEN_ED_CLASS_SIZE,
-    MAX_SPECIALS_CLASS_SIZE,
     MAX_SERVICE_GROUP_SIZE,
-    KNOWN_SPECIALS_SUBJECTS,
     SPECIALS_MANDATED_MINUTES_PER_WEEK,
 )
 
@@ -100,11 +98,6 @@ def _peak(intervals: List[Tuple[int, int]]) -> Tuple[int, Optional[int]]:
         if current > peak:
             peak, at = current, minute
     return peak, at
-
-
-def _subject_base(subject: str) -> str:
-    """"PE - 2A" -> "PE"."""
-    return (subject or "").split(" - ")[0].strip()
 
 
 def get_homerooms(students: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
@@ -296,8 +289,8 @@ def check_staff_coverage(
                 f"{subject} staffing may be insufficient",
                 f"Homerooms need {total_needed} {subject} session(s)/week, but "
                 f"{teacher_count} {subject} teacher(s) can cover at most {capacity} "
-                f"Specials blocks/week without combining classes. Add staff or "
-                f"allow combining homerooms.",
+                f"Specials blocks/week, and a Specials teacher can only take one "
+                f"homeroom at a time. Add staff or more Specials blocks.",
                 legal_reference="Specials / mandated instructional minutes",
                 affected_period="school year",
             ))
@@ -366,6 +359,55 @@ def validate_teacher_schedules(entries: List[Dict[str, Any]]) -> List[Dict[str, 
     return flags
 
 
+def validate_specials_one_homeroom(
+    entries: List[Dict[str, Any]],
+    students_by_id: Dict[str, Dict[str, Any]],
+    period_config: PeriodConfig,
+) -> List[Dict[str, Any]]:
+    """
+    A Specials teacher teaches ONE homeroom at a time. Flags any Specials
+    teacher who has students from two or more homerooms at overlapping
+    times -- e.g. two homerooms combined into one PE class, whether by an
+    older schedule run or a manual edit.
+    """
+    flags: List[Dict[str, Any]] = []
+    by_teacher_day: Dict[Tuple[str, str], List[Tuple[int, int, str]]] = {}
+    for entry in entries:
+        teacher = entry.get("teacher")
+        if not teacher or entry.get("service_type") != "General Ed":
+            continue
+        if period_config.role(entry.get("block_subject") or "") != ROLE_SPECIALS:
+            continue
+        student = students_by_id.get(str(entry.get("student_id"))) or {}
+        homeroom = str(student.get("homeroom") or "").strip()
+        if not homeroom:
+            continue
+        start, end = _interval(entry)
+        by_teacher_day.setdefault((teacher, entry["day_of_week"]), []).append((start, end, homeroom))
+
+    for (teacher, day), items in by_teacher_day.items():
+        items.sort()
+        reported = set()
+        active: List[Tuple[int, int, str]] = []
+        for start, end, homeroom in items:
+            active = [a for a in active if a[1] > start]
+            for o_start, o_end, other in active:
+                pair = tuple(sorted((homeroom, other)))
+                if other != homeroom and pair not in reported:
+                    reported.add(pair)
+                    flags.append(_flag(
+                        "multiple", "specials_homerooms_combined", "critical",
+                        f"{teacher} has two homerooms at once on {day_label(day)}",
+                        f"{teacher} is scheduled with homerooms {pair[0]} and {pair[1]} "
+                        f"during the same Specials period. A Specials teacher can only "
+                        f"take one homeroom at a time; regenerate the schedule or move "
+                        f"one homeroom.",
+                        affected_period=f"{day_label(day)} {format_range(max(start, o_start), min(end, o_end))}",
+                    ))
+            active.append((start, end, homeroom))
+    return flags
+
+
 def validate_class_sizes(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Peak students at once in each gen-ed class (homeroom blocks and
     Specials). FLEX groups are sized by the scheduler and skipped."""
@@ -379,10 +421,7 @@ def validate_class_sizes(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         classes.setdefault(key, []).append(_interval(entry))
 
     for (teacher, day, subject, _room), intervals in classes.items():
-        max_allowed = (
-            MAX_SPECIALS_CLASS_SIZE if _subject_base(subject) in KNOWN_SPECIALS_SUBJECTS
-            else MAX_GEN_ED_CLASS_SIZE
-        )
+        max_allowed = MAX_GEN_ED_CLASS_SIZE
         peak, at = _peak(intervals)
         if peak > max_allowed:
             flags.append(_flag(
@@ -555,6 +594,7 @@ def run_all_compliance_checks(
     flags: List[Dict[str, Any]] = []
     flags.extend(validate_teacher_schedules(entries))
     flags.extend(validate_class_sizes(entries))
+    flags.extend(validate_specials_one_homeroom(entries, students_by_id, period_config))
     flags.extend(validate_block_policies(entries, period_config))
     flags.extend(validate_pullout_limits(entries, students_by_id, period_config))
     flags.extend(validate_weekly_service_minutes(entries, students_by_id))

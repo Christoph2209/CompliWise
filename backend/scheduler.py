@@ -50,7 +50,6 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from scheduling_core import (
     DAYS,
-    day_label,
     PeriodConfig,
     Block,
     ROLE_HOMEROOM,
@@ -70,7 +69,6 @@ from scheduling_core import (
     MAX_SERVICE_GROUP_SIZE,
     MAX_GEN_ED_CLASS_SIZE,
     SPECIALS_MANDATED_MINUTES_PER_WEEK,
-    MAX_SPECIALS_CLASS_SIZE,
 )
 from compliance import run_all_compliance_checks
 
@@ -1144,7 +1142,7 @@ def build_specials_schedule(
     cycle; days are then walked in order and, within a day, sibling
     homerooms take turns, so if 2A gets the PE teacher on A day, 2B
     (same block) takes Music. A session is exactly one Specials block
-    long.
+    long, and a Specials teacher never has two homerooms at once.
     """
     entries: List[Dict[str, Any]] = []
     flags: List[Dict[str, Any]] = []
@@ -1238,27 +1236,6 @@ def build_specials_schedule(
             plan["queue"].remove(subject)
         plan["minutes"][subject] += block.length
 
-    def find_merge_host(subject, homeroom, day, block, size):
-        """Another homeroom's class of this subject at the same time with room for `size` more."""
-        locked = homeroom_subject_teacher.get((homeroom, subject))
-        for name in ([locked] if locked else teachers_by_subject.get(subject, [])):
-            hosts = [
-                iv for iv in schedule_index.teacher_intervals_on(name, day)
-                if (iv["start"], iv["end"]) == (block.start, block.end)
-                and iv["subject"].startswith(f"{subject} - ")
-            ]
-            if not hosts:
-                continue
-            label = (hosts[0]["subject"], hosts[0]["room"])
-            if schedule_index.teacher_conflict(
-                name, day, block.start, block.end, *label
-            ) is not None:
-                continue
-            current = len({iv["student_id"] for iv in hosts if iv["student_id"]})
-            if current + size <= MAX_SPECIALS_CLASS_SIZE:
-                return name, label
-        return None
-
     def try_dedicated(homeroom, plan, info, day, block, subject):
         """Give the homeroom its own Specials teacher for the block, if one is free."""
         locked = homeroom_subject_teacher.get((homeroom, subject))
@@ -1275,24 +1252,6 @@ def build_specials_schedule(
                 return True
         return False
 
-    def try_merge(homeroom, plan, info, day, block, subject):
-        """Fall back to combining the homeroom with another class (flagged as info)."""
-        host = find_merge_host(subject, homeroom, day, block, len(info["roster"]))
-        if not host:
-            return False
-        name, label = host
-        book(homeroom, info, day, block, name, label)
-        homeroom_subject_teacher.setdefault((homeroom, subject), name)
-        record(plan, subject, block)
-        flags.append(make_flag(
-            "multiple", "specials_classes_combined", "info",
-            f"{homeroom} combined for {subject}",
-            f"Homeroom {homeroom} had no dedicated {subject} teacher free, so it "
-            f"joined {label[1]}'s class with {name}.",
-            affected_period=f"{day_label(day)} {format_range(block.start, block.end)}",
-        ))
-        return True
-
     for day in DAYS:
         for homeroom, plan in plans.items():
             info = homeroom_info[homeroom]
@@ -1306,9 +1265,11 @@ def build_specials_schedule(
                     continue
 
                 # The block's planned subject gets first try. After it,
-                # mandated subjects (PE) come before target-only ones --
-                # joining another homeroom's class if their teacher is
-                # taken. If the mandate has fallen behind (as many
+                # mandated subjects (PE) come before target-only ones.
+                # A Specials teacher only ever takes ONE homeroom per
+                # block, so if every teacher is busy the block goes
+                # unstaffed (flagged) rather than doubling classes up.
+                # If the mandate has fallen behind (as many
                 # sessions still owed as blocks left), the plan is
                 # dropped and mandated subjects go first.
                 # Once targets are met, keep staffing the block anyway:
@@ -1336,13 +1297,6 @@ def build_specials_schedule(
                         if try_dedicated(homeroom, plan, info, day, block, subject):
                             booked = True
                             break
-                    if booked:
-                        break
-                    if period_config.allow_specials_merge:
-                        for subject in tier:
-                            if try_merge(homeroom, plan, info, day, block, subject):
-                                booked = True
-                                break
                     if booked:
                         break
 
