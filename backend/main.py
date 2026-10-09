@@ -69,6 +69,7 @@ from compliwise_db import (
     StudentService,
     User,
     AuditLog,
+    PasswordChangeRequest,
 )
 from import_csv_data import detect_file_kind, import_student_services, import_students, import_staff
 from import_validation import validate_staff_csv, validate_students_csv, summarize_errors
@@ -135,7 +136,28 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
         request.session.clear()
         raise HTTPException(status_code=401, detail="Session no longer valid")
 
+    # A password change signs the account out of every session that
+    # started before it (the session cookie itself can't be revoked).
+    if user.password_changed_at and _session_started(request) < user.password_changed_at:
+        request.session.clear()
+        raise HTTPException(status_code=401, detail="Password changed, please log in again")
+
     return user
+
+
+def _utcnow() -> datetime:
+    """Naive UTC, matching the DateTime columns (which default to utcnow)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _session_started(request: Request) -> datetime:
+    """When this session logged in. Sessions from before this was recorded
+    count as infinitely old, so any password change ends them."""
+    raw = request.session.get("auth_at")
+    try:
+        return datetime.fromisoformat(raw) if raw else datetime.min
+    except (TypeError, ValueError):
+        return datetime.min
 
 
 # Role groups. Every endpoint below declares which roles may call it.
@@ -236,6 +258,15 @@ class CreateUserRequest(BaseModel):
     password: str
     role: str  # "admin" | "principal" | "teacher" | "aide"
     staff_id: str | None = None  # optional — not every user needs a staff record
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(max_length=128)
+
+
+class ReviewPasswordChange(BaseModel):
+    note: str | None = Field(default=None, max_length=500)
+
 
 class ScheduleGenerationConfig(BaseModel):
     """Shape read by PeriodConfig.from_config() -- see scheduling_core.py."""
@@ -448,6 +479,7 @@ def login(data: LoginRequest, request: Request, db: Session = Depends(get_db)):
 
     request.session.clear()
     request.session["user_id"] = str(user.id)
+    request.session["auth_at"] = _utcnow().isoformat()
 
     write_audit_log(
         db,
@@ -791,6 +823,285 @@ def add_user(
     db.refresh(new_user)
 
     return {"id": str(new_user.id), "email": new_user.email, "role": new_user.role}
+
+
+# ---------------------------------------------------------------------------
+# Password changes
+#
+# Admins change their own password directly. Everyone else files a request
+# that an admin from the same school must approve before it takes effect;
+# until then the old password keeps working. The new password is held only
+# as an Argon2 hash, and only while the request is pending.
+# ---------------------------------------------------------------------------
+
+MIN_PASSWORD_LENGTH = 10
+PENDING, APPROVED, REJECTED, CANCELLED = "pending", "approved", "rejected", "cancelled"
+
+
+def _password_change_needs_approval(user: User) -> bool:
+    return user.role != "admin"
+
+
+def _check_new_password(user: User, current: str, new: str) -> None:
+    if len(new) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"New password must be at least {MIN_PASSWORD_LENGTH} characters",
+        )
+    if new == current:
+        raise HTTPException(status_code=400, detail="New password must be different from the current one")
+    if new.strip().lower() == (user.email or "").lower():
+        raise HTTPException(status_code=400, detail="Don't use your email address as your password")
+
+
+def _password_request_dict(req: PasswordChangeRequest, owner: User | None = None, reviewer: User | None = None) -> dict:
+    """Public shape of a request. Never includes the password hash."""
+    data = {
+        "id": str(req.id),
+        "status": req.status,
+        "requested_at": req.requested_at.isoformat() if req.requested_at else None,
+        "reviewed_at": req.reviewed_at.isoformat() if req.reviewed_at else None,
+        "review_note": req.review_note,
+    }
+    if owner is not None:
+        data["user"] = {
+            "id": str(owner.id),
+            "email": owner.email,
+            "full_name": owner.full_name,
+            "role": owner.role,
+        }
+    if reviewer is not None:
+        data["reviewed_by"] = reviewer.full_name or reviewer.email
+    return data
+
+
+@app.get("/me/password-change-request")
+def get_my_password_change_request(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Whether this account needs approval, and its most recent request (any status)."""
+    latest = (
+        db.query(PasswordChangeRequest)
+        .filter(PasswordChangeRequest.user_id == user.id)
+        .order_by(PasswordChangeRequest.requested_at.desc())
+        .first()
+    )
+    reviewer = None
+    if latest and latest.reviewed_by:
+        reviewer = db.query(User).filter(User.id == latest.reviewed_by).first()
+    return {
+        "requires_approval": _password_change_needs_approval(user),
+        "request": _password_request_dict(latest, reviewer=reviewer) if latest else None,
+    }
+
+
+@app.post("/me/password")
+def change_my_password(
+    payload: ChangePasswordRequest,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Admins: change the password now. Everyone else: file (or replace) a
+    pending request for an admin to review. Either way the current
+    password must be correct, so a borrowed, still-logged-in browser
+    can't be used to take the account over.
+    """
+    if not verify_password(payload.current_password, user.password_hash):
+        write_audit_log(
+            db, action="Password Change Failed", school_id=user.school_id, user_id=user.id,
+            entity_type="user", entity_id=user.id,
+            after={"reason": "wrong current password"}, ip_address=_client_ip(request),
+        )
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    _check_new_password(user, payload.current_password, payload.new_password)
+    now = _utcnow()
+
+    if not _password_change_needs_approval(user):
+        user.password_hash = hash_password(payload.new_password)
+        user.password_changed_at = now
+        db.commit()
+        # Other sessions end; this one carries on.
+        request.session["auth_at"] = now.isoformat()
+        write_audit_log(
+            db, action="Password Changed", school_id=user.school_id, user_id=user.id,
+            entity_type="user", entity_id=user.id,
+            after={"approved_by": "self (admin)"}, ip_address=_client_ip(request),
+        )
+        return {"status": "changed"}
+
+    # Replace any request still waiting -- only the newest one counts.
+    superseded = (
+        db.query(PasswordChangeRequest)
+        .filter(PasswordChangeRequest.user_id == user.id, PasswordChangeRequest.status == PENDING)
+        .all()
+    )
+    for old in superseded:
+        old.status = CANCELLED
+        old.new_password_hash = None
+        old.reviewed_at = now
+        old.review_note = "Replaced by a newer request"
+    db.flush()
+
+    req = PasswordChangeRequest(
+        school_id=user.school_id,
+        user_id=user.id,
+        new_password_hash=hash_password(payload.new_password),
+        status=PENDING,
+        requested_at=now,
+    )
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+
+    write_audit_log(
+        db, action="Password Change Requested", school_id=user.school_id, user_id=user.id,
+        entity_type="password_change_request", entity_id=req.id,
+        after={"user_email": user.email, "replaced": len(superseded)}, ip_address=_client_ip(request),
+    )
+    return {"status": PENDING, "request": _password_request_dict(req)}
+
+
+@app.delete("/me/password-change-request")
+def cancel_my_password_change_request(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Withdraw this account's pending request, if there is one."""
+    req = (
+        db.query(PasswordChangeRequest)
+        .filter(PasswordChangeRequest.user_id == user.id, PasswordChangeRequest.status == PENDING)
+        .first()
+    )
+    if not req:
+        raise HTTPException(status_code=404, detail="No pending request")
+
+    req.status = CANCELLED
+    req.new_password_hash = None
+    req.reviewed_at = _utcnow()
+    db.commit()
+    write_audit_log(
+        db, action="Password Change Cancelled", school_id=user.school_id, user_id=user.id,
+        entity_type="password_change_request", entity_id=req.id, ip_address=_client_ip(request),
+    )
+    return {"status": CANCELLED}
+
+
+@app.get("/admin/password-change-requests")
+def list_password_change_requests(
+    status: str = PENDING,
+    admin: User = Depends(require_roles(*ADMIN)),
+    db: Session = Depends(get_db),
+):
+    """Admin only: this school's password change requests, newest first.
+    status=pending (default) or status=all for recent history."""
+    query = (
+        db.query(PasswordChangeRequest, User)
+        .join(User, User.id == PasswordChangeRequest.user_id)
+        .filter(PasswordChangeRequest.school_id == admin.school_id)
+    )
+    if status != "all":
+        if status not in (PENDING, APPROVED, REJECTED, CANCELLED):
+            raise HTTPException(status_code=400, detail="Unknown status")
+        query = query.filter(PasswordChangeRequest.status == status)
+
+    rows = query.order_by(PasswordChangeRequest.requested_at.desc()).limit(200).all()
+
+    reviewer_ids = {r.reviewed_by for r, _ in rows if r.reviewed_by}
+    reviewers = {
+        u.id: u for u in db.query(User).filter(User.id.in_(reviewer_ids)).all()
+    } if reviewer_ids else {}
+
+    return [
+        _password_request_dict(r, owner=u, reviewer=reviewers.get(r.reviewed_by))
+        for r, u in rows
+    ]
+
+
+def _pending_request_for_review(db: Session, admin: User, request_id: str) -> PasswordChangeRequest:
+    """The pending request in the admin's school, row-locked so two admins
+    can't both act on it."""
+    req = (
+        db.query(PasswordChangeRequest)
+        .filter(
+            PasswordChangeRequest.id == _parse_uuid(request_id, "Request"),
+            PasswordChangeRequest.school_id == admin.school_id,
+        )
+        .with_for_update()
+        .first()
+    )
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if req.status != PENDING:
+        raise HTTPException(status_code=409, detail=f"This request was already {req.status}")
+    if req.user_id == admin.id:
+        raise HTTPException(status_code=403, detail="You can't review your own request")
+    return req
+
+
+@app.post("/admin/password-change-requests/{request_id}/approve")
+def approve_password_change(
+    request_id: str,
+    request: Request,
+    payload: ReviewPasswordChange | None = None,
+    admin: User = Depends(require_roles(*ADMIN)),
+    db: Session = Depends(get_db),
+):
+    """Admin only: apply the requested password. The user is signed out of
+    every existing session and logs in again with the new password."""
+    req = _pending_request_for_review(db, admin, request_id)
+    owner = db.query(User).filter(User.id == req.user_id).first()
+    if not owner or not owner.is_active or not req.new_password_hash:
+        raise HTTPException(status_code=409, detail="This account can no longer be changed")
+
+    now = _utcnow()
+    owner.password_hash = req.new_password_hash
+    owner.password_changed_at = now
+    req.status = APPROVED
+    req.new_password_hash = None
+    req.reviewed_by = admin.id
+    req.reviewed_at = now
+    req.review_note = (payload.note if payload else None) or None
+    db.commit()
+
+    write_audit_log(
+        db, action="Password Change Approved", school_id=admin.school_id, user_id=admin.id,
+        entity_type="password_change_request", entity_id=req.id,
+        after={"user_email": owner.email, "note": req.review_note}, ip_address=_client_ip(request),
+    )
+    return _password_request_dict(req, owner=owner, reviewer=admin)
+
+
+@app.post("/admin/password-change-requests/{request_id}/reject")
+def reject_password_change(
+    request_id: str,
+    request: Request,
+    payload: ReviewPasswordChange | None = None,
+    admin: User = Depends(require_roles(*ADMIN)),
+    db: Session = Depends(get_db),
+):
+    """Admin only: refuse the request. The old password keeps working."""
+    req = _pending_request_for_review(db, admin, request_id)
+    owner = db.query(User).filter(User.id == req.user_id).first()
+
+    req.status = REJECTED
+    req.new_password_hash = None
+    req.reviewed_by = admin.id
+    req.reviewed_at = _utcnow()
+    req.review_note = (payload.note if payload else None) or None
+    db.commit()
+
+    write_audit_log(
+        db, action="Password Change Rejected", school_id=admin.school_id, user_id=admin.id,
+        entity_type="password_change_request", entity_id=req.id,
+        after={"user_email": owner.email if owner else None, "note": req.review_note},
+        ip_address=_client_ip(request),
+    )
+    return _password_request_dict(req, owner=owner, reviewer=admin)
 
 
 @app.get("/admin/staff/unassigned")

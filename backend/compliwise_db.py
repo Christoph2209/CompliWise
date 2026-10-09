@@ -1,5 +1,5 @@
 """
-dmscheduler_db.py
+compliwise_db.py
 
 SQLAlchemy models and the database session for CompliWise.
 
@@ -31,6 +31,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
@@ -545,6 +546,50 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
+    )
+
+    # Set whenever the password actually changes. Sessions started before
+    # this moment are refused (see get_current_user in main.py), so an
+    # approved change signs the account out everywhere.
+    password_changed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+
+class PasswordChangeRequest(Base):
+    """
+    A non-admin user's request to change their own password. The new
+    password is stored only as a hash and only while the request is
+    pending; an admin from the same school approves or rejects it, and
+    only approval copies the hash onto the user.
+
+    status: pending | approved | rejected | cancelled
+    """
+
+    __tablename__ = "password_change_requests"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+
+    school_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("schools.id"), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+
+    new_password_hash: Mapped[Optional[str]] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+
+    requested_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    reviewed_by: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("users.id"))
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    review_note: Mapped[Optional[str]] = mapped_column(Text)
+
+    __table_args__ = (
+        Index("ix_password_change_requests_school_status", "school_id", "status"),
+        Index("ix_password_change_requests_user", "user_id"),
+        # At most one pending request per user.
+        Index(
+            "uq_password_change_requests_one_pending",
+            "user_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+        ),
     )
 
 
