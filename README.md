@@ -260,7 +260,7 @@ Steps:
    - A student keeps the same provider all week when possible.
    - ENL groups prefer students from the same homeroom. Where that would leave any student short of a session, the preference is dropped and those students are grouped across homerooms instead.
    - Once the groups are set, an ENL pull-out group whose students all share a homeroom (or a single student) becomes a push-in, as long as it falls in a subject that allows ENL push-in.
-2. **Specials** — each homeroom gets its PE / Music / Art teachers.
+2. **Specials** — each homeroom gets its PE / Music / Art teachers. A Specials teacher takes one homeroom per period; if no teacher is free, the block is left unstaffed and flagged instead of combining homerooms.
 3. **Flex / WIN groups** — built inside each grade's FLEX block.
 4. **Everything else** — the rest of each student's day is filled from the master schedule.
 5. **Staff schedules** — one row per teacher per class, including prep and lunch.
@@ -270,6 +270,7 @@ Steps:
 
 - **Student conflicts** — a student is never in two places at once
 - **Staff conflicts** — a provider only takes students together when it is the same group
+- **One homeroom per Specials period** — a PE, Music or Art teacher never has two homerooms at the same time (also checked on saved schedules)
 - **Pull-out limits** — maximum pull-outs per day and minimum gap between them (configurable)
 - **Capacity** — groups and classes can't exceed their limits
 

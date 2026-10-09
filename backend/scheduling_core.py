@@ -336,7 +336,6 @@ DEFAULT_SPECIALS_SESSIONS_PER_WEEK = {
 }
 
 MAX_GEN_ED_CLASS_SIZE = 32
-MAX_SPECIALS_CLASS_SIZE = MAX_GEN_ED_CLASS_SIZE * 2
 
 
 # ---------------------------------------------------------------
@@ -471,7 +470,6 @@ class PeriodConfig:
         pushin_subjects: Optional[Dict[str, List[str]]] = None,
         specials_titles: Optional[Dict[str, str]] = None,
         specials_sessions_per_week: Optional[Dict[str, int]] = None,
-        allow_specials_merge: bool = True,
         max_pullouts_per_day: Optional[int] = None,
         min_gap_minutes: int = 0,
         slot_step_minutes: int = 5,
@@ -544,7 +542,6 @@ class PeriodConfig:
         )
         # NOTE: SPECIALS_MANDATED_MINUTES_PER_WEEK is intentionally NOT
         # configurable here -- a state mandate isn't a scheduling preference.
-        self.allow_specials_merge: bool = allow_specials_merge
         self.max_pullouts_per_day: int = (
             max_pullouts_per_day if max_pullouts_per_day is not None else MAX_PULLOUTS_PER_DAY
         )
@@ -650,7 +647,6 @@ class PeriodConfig:
             "pushin_subjects": self.pushin_subjects,
             "max_pullouts_per_day": self.max_pullouts_per_day,
             "min_gap_minutes": self.min_gap_minutes,
-            "allow_specials_merge": self.allow_specials_merge,
             "specials_titles": self.specials_titles,
             "specials_sessions_per_week": self.specials_sessions_per_week,
         }
@@ -682,7 +678,6 @@ class PeriodConfig:
             "pullout_constraints": {
                 "max_pullouts_per_day": self.max_pullouts_per_day,
                 "min_gap_minutes": self.min_gap_minutes,
-                "allow_specials_merge": self.allow_specials_merge,
             },
             "specials_requirements": [
                 {"subject": subject, "sessions_per_week": count}
@@ -708,8 +703,9 @@ class PeriodConfig:
           block_policies: [{"subject": "ELA", "allow_pullout": true,
               "allow_pushin": true, "pullout_score": -400,
               "role": "homeroom"}]                     # optional overrides
-          pullout_constraints: {"max_pullouts_per_day", "min_gap_minutes",
-              "allow_specials_merge"}
+          pullout_constraints: {"max_pullouts_per_day", "min_gap_minutes"}
+              (an "allow_specials_merge" key from older saved runs is
+              ignored: a Specials teacher never takes two homerooms at once)
           specials_requirements: [{"subject", "sessions_per_week"}]
         """
         if isinstance(config, dict):
@@ -758,7 +754,6 @@ class PeriodConfig:
             grade_schedules=grade_schedules,
             block_policies=block_policies or None,
             specials_sessions_per_week=specials_sessions_per_week or None,
-            allow_specials_merge=pullout.get("allow_specials_merge", True),
             max_pullouts_per_day=pullout.get("max_pullouts_per_day"),
             min_gap_minutes=pullout.get("min_gap_minutes", 0),
         )

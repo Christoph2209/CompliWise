@@ -40,7 +40,6 @@ export interface BlockPolicy {
 export interface PulloutConstraints {
   max_pullouts_per_day: number;
   min_gap_minutes: number;
-  allow_specials_merge: boolean; // combine two homerooms into one shared specials session
 }
 
 export interface SpecialsRequirement {
@@ -247,7 +246,6 @@ export default function GenerateScheduleModal({ onClose, onGenerated }: Generate
   const [pulloutConstraints, setPulloutConstraints] = useState<PulloutConstraints>({
     max_pullouts_per_day: 2,
     min_gap_minutes: 0,
-    allow_specials_merge: true,
   });
   const [specials, setSpecials] = useState<EditableSpecial[]>([]);
 
@@ -906,16 +904,6 @@ export default function GenerateScheduleModal({ onClose, onGenerated }: Generate
                 + Add specials subject
               </button>
 
-              <label className="gsm-checkbox-field">
-                <input
-                  type="checkbox"
-                  checked={pulloutConstraints.allow_specials_merge}
-                  onChange={(e) =>
-                    setPulloutConstraints((prev) => ({ ...prev, allow_specials_merge: e.target.checked }))
-                  }
-                />
-                Combine two homerooms into one specials class when no teacher is free
-              </label>
             </div>
           )}
         </div>

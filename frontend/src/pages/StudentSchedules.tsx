@@ -252,8 +252,8 @@ export default function StudentSchedules() {
     const kind = entryKind(item);
     const badge = kind === "pullout" ? "Pull-out" : kind === "push_in" ? "Push-in" : null;
     const time = item.time_range ?? `${clockLabel(item.start_minute, false)}-${clockLabel(item.end_minute, false)}`;
-    // Specials are stored as "PE - 2A", naming the class's HOST homeroom;
-    // for a merged class that's another homeroom, so show just "PE".
+    // Specials are stored as "PE - 2A" (subject - homeroom); the card
+    // already sits in that homeroom's schedule, so show just "PE".
     const title = kind === "specials" ? item.subject.split(" - ")[0].trim() : item.subject;
 
     if (height >= 46) {
