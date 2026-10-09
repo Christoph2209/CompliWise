@@ -305,7 +305,7 @@ All endpoints except login and first-run setup require a logged-in session. The 
 | `GET/POST/PUT/DELETE /students/{id}/services…`  | admin, principal | A student's service requirements         |
 | `GET /staff`, `POST /staff`, `PUT /staff/{id}`  | staff / managers | Staff members                            |
 | `POST /schedule/generate/start`                 | admin, principal | Generate a schedule in the background    |
-| `GET /schedule-runs`, `GET /schedule-runs/{id}` | admin, principal | Saved schedule runs                      |
+| `GET /schedule-runs`, `GET /schedule-runs/{id}` | admin, principal | Generated schedule runs (manual compliance checks aren't listed) |
 | `GET /schedule`                                 | all staff      | Student schedule entries (teachers: their own plus their students' pull-outs) |
 | `GET /staff-schedule`                           | all staff      | Teacher schedules (teachers: their own)    |
 | `GET /me/students`                              | teacher        | The teacher's classes and students         |

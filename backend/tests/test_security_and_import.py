@@ -452,3 +452,31 @@ def test_edited_iep_service_drives_the_schedule():
     ]
     assert len(sessions) == 4
     assert all(e["end_minute"] - e["start_minute"] == 20 for e in sessions)
+
+
+def test_manual_compliance_checks_stay_out_of_the_schedule_list():
+    _, users = _make_school_with_users("Theta School")
+    admin = _login(_client(), users["admin"], "pw12345678")
+
+    assert admin.post("/import/commit", files=_files(STUDENTS_CSV, STAFF_CSV)).status_code == 200
+    config = admin.get("/schedule/config-defaults").json()["config"]
+    assert admin.post("/save-schedule", json=config).status_code == 200
+    generated = admin.get("/schedule-runs").json()
+    assert len(generated) == 1
+
+    r = admin.post("/run-compliance-check")
+    assert r.status_code == 200, r.text
+    check_run_id = r.json()["schedule_run_id"]
+
+    # The check isn't listed as a schedule (pickers and the dashboard's
+    # draft count both read this list) ...
+    runs = admin.get("/schedule-runs").json()
+    assert [run["id"] for run in runs] == [generated[0]["id"]]
+    assert all(run["name"] != main.COMPLIANCE_CHECK_RUN_NAME for run in runs)
+
+    # ... can't be published ...
+    assert admin.post(f"/schedule-runs/{check_run_id}/publish").status_code == 409
+
+    # ... and its flags still show on the Compliance page.
+    flags = admin.get("/compliance-flags").json()
+    assert any(f["run_id"] == check_run_id for f in flags)
