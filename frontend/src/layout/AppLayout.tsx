@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/authContext";
+import { listPasswordRequests } from "../api/account";
 
 const SIDEBAR_COLLAPSED_KEY = "compliwise:sidebarCollapsed";
 
@@ -9,6 +10,7 @@ type NavItem = {
   label: string;
   icon: React.ReactNode;
   show?: boolean;
+  badge?: number;
 };
 
 function Icon({ children }: { children: React.ReactNode }) {
@@ -80,6 +82,20 @@ const icons = {
       <path d="M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2" />
     </Icon>
   ),
+  account: (
+    <Icon>
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4 21c0-4 3.6-7 8-7s8 3 8 7" />
+    </Icon>
+  ),
+  key: (
+    <Icon>
+      <circle cx="8" cy="15" r="4" />
+      <path d="M10.8 12.2L20 3" />
+      <path d="M16 7l3 3" />
+      <path d="M18 5l2 2" />
+    </Icon>
+  ),
   menu: (
     <Icon>
       <line x1="4" y1="7" x2="20" y2="7" />
@@ -111,6 +127,25 @@ export default function AppLayout() {
     }
   }, [collapsed]);
 
+  // Admins see how many password changes are waiting for them.
+  const isAdmin = user?.role === "admin";
+  const [pendingPasswords, setPendingPasswords] = useState(0);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    let cancelled = false;
+    const refresh = () =>
+      listPasswordRequests("pending")
+        .then((rows) => !cancelled && setPendingPasswords(rows.length))
+        .catch(() => {});
+    refresh();
+    const interval = setInterval(refresh, 60000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [isAdmin, location.pathname]);
+
   function handleLogout() {
     logout();
     navigate("/login");
@@ -124,7 +159,9 @@ export default function AppLayout() {
     { to: "/teacher-schedules", label: "Teacher Schedules", icon: icons.schedules },
     { to: "/compliance", label: "Compliance", icon: icons.compliance, show: isAdminOrPrincipal },
     { to: "/flex_groups", label: "Flex Groups", icon: icons.flex },
-    { to: "/import", label: "Import Students", icon: icons.import, show: user?.role === "admin" },
+    { to: "/import", label: "Import Students", icon: icons.import, show: isAdmin },
+    { to: "/password-requests", label: "Password Requests", icon: icons.key, show: isAdmin, badge: pendingPasswords },
+    { to: "/account", label: "My Account", icon: icons.account },
   ];
 
   return (
@@ -163,6 +200,11 @@ export default function AppLayout() {
                   >
                     {item.icon}
                     {item.label}
+                    {item.badge ? (
+                      <span style={styles.badge} aria-label={`${item.badge} waiting`}>
+                        {item.badge}
+                      </span>
+                    ) : null}
                   </Link>
                 );
               })}
@@ -301,6 +343,21 @@ const styles: Record<string, React.CSSProperties> = {
     background: "white",
     color: "var(--green-700)",
     fontWeight: 700,
+  },
+  badge: {
+    marginLeft: "auto",
+    minWidth: "20px",
+    height: "20px",
+    padding: "0 6px",
+    borderRadius: "999px",
+    background: "var(--amber-500)",
+    color: "#142019",
+    fontSize: "12px",
+    fontWeight: 700,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    boxSizing: "border-box",
   },
   logoutButton: {
     marginTop: "auto",

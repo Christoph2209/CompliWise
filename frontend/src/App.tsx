@@ -12,6 +12,8 @@ import FlexGroups from "./pages/FlexGroups";
 import ImportData from "./pages/ImportData";
 import Login from "./pages/LoginPage";
 import SetupWizard from "./pages/SetupWizard";
+import AccountPage from "./pages/Account";
+import PasswordRequestsPage from "./pages/PasswordRequests";
 import { AuthProvider } from "./context/authContext";
 import ProtectedRoute from "./components/ProtectedRoute";
 import RoleRoute from "./components/RoleRoute";
@@ -75,6 +77,15 @@ function App() {
                 }
               />
               <Route path="/flex_groups" element={<FlexGroups />} />
+              <Route path="/account" element={<AccountPage />} />
+              <Route
+                path="/password-requests"
+                element={
+                  <RoleRoute allowed={["admin"]}>
+                    <PasswordRequestsPage />
+                  </RoleRoute>
+                }
+              />
               <Route
                 path="/import"
                 element={

@@ -14,6 +14,7 @@ It is a FastAPI backend with a PostgreSQL database and a React frontend. It is d
 - [Deploying](DEPLOY.md)
 - [Running the Tests](#running-the-tests)
 - [Roles](#roles)
+- [Accounts and Passwords](#accounts-and-passwords)
 - [Scheduling Workflow](#scheduling-workflow)
 - [Scheduling Algorithm](#scheduling-algorithm)
 - [Compliance Engine](#compliance-engine)
@@ -33,6 +34,7 @@ It is a FastAPI backend with a PostgreSQL database and a React frontend. It is d
 - CSV import with row-by-row validation before anything is saved
 - Login with role-based access; each school's data is kept separate
 - Audit log of logins and changes
+- Password changes for staff require an admin's approval
 
 ## Tech Stack
 
@@ -179,12 +181,30 @@ python -m pytest tests -q
 
 | Role        | Can do                                                                  |
 |-------------|-------------------------------------------------------------------------|
-| `admin`     | Everything, plus user accounts, CSV import, resets and the audit log    |
+| `admin`     | Everything, plus user accounts, password approvals, CSV import, resets and the audit log |
 | `principal` | Manage students, staff and services; generate and edit schedules        |
 | `teacher`   | See their own schedule, their students, and those students' pull-outs   |
 | `aide`      | Same as teacher                                                         |
 
 Every request only sees data from the user's own school.
+
+## Accounts and Passwords
+
+Everyone has a **My Account** page (`/account`) with their profile and a change-password form.
+
+- **Teachers, aides and principals** can't change their password on their own. Submitting the form sends a request to their school's admins, and the old password keeps working until an admin decides. The page shows whether the request is waiting, approved or rejected (with the admin's note), and the person can withdraw it. A new request replaces any one still waiting.
+- **Admins** review requests on the **Password Requests** page (`/password-requests`). A badge in the sidebar shows how many are waiting. Approving applies the new password; rejecting leaves the old one in place. It's worth confirming with the person before approving, since a request they didn't make could mean someone else is using their account.
+- **Admins change their own password directly**, with no approval step.
+
+Safeguards:
+
+- The current password is required to submit a request, so a computer left signed in can't be used to take over the account.
+- New passwords must be at least 10 characters and different from the current one.
+- The requested password is stored only as an Argon2 hash, and only while the request is pending. The hash is deleted once the request is approved, rejected or withdrawn.
+- Admins only see and act on requests from their own school, and every request, approval, rejection and failed attempt is recorded in the audit log.
+- When a password changes, every session that started before the change is signed out, and the person signs in again with the new password.
+
+Upgrading an existing install: run `alembic upgrade head` to create the `password_change_requests` table. Everyone already signed in will need to sign in once more after the upgrade.
 
 ## Scheduling Workflow
 
@@ -276,6 +296,11 @@ All endpoints except login and first-run setup require a logged-in session. The 
 | `GET /setup/status`, `POST /setup/initialize`   | before setup   | First-run setup                            |
 | `POST /import/preview`, `POST /import/commit`   | admin          | Validate / import student and staff CSVs   |
 | `POST /admin/users`                             | admin          | Create a user account                      |
+| `GET /me/password-change-request`               | anyone         | Whether approval is needed, and the latest request |
+| `POST /me/password`                             | anyone         | Change password (admins) or request a change (everyone else) |
+| `DELETE /me/password-change-request`            | anyone         | Withdraw a pending request                 |
+| `GET /admin/password-change-requests`           | admin          | Pending requests (`?status=all` for history) |
+| `POST /admin/password-change-requests/{id}/approve`, `…/reject` | admin | Decide on a request |
 | `GET /students`, `PUT /students/{id}`           | admin, principal | Students                                 |
 | `GET/POST/PUT/DELETE /students/{id}/services…`  | admin, principal | A student's service requirements         |
 | `GET /staff`, `POST /staff`, `PUT /staff/{id}`  | staff / managers | Staff members                            |
