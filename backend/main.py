@@ -287,6 +287,11 @@ VALID_DELIVERIES = {"pullout", "push_in", "class"}
 # Name given to runs that hold a whole-school schedule (vs. compliance-only runs).
 FULL_SCHEDULE_RUN_NAME = "Full School Schedule"
 
+# Name of the runs POST /run-compliance-check saves. They only hold the
+# flags from that check (no schedule entries), so they're kept out of
+# the schedule run list and can't be published.
+COMPLIANCE_CHECK_RUN_NAME = "Compliance Check"
+
 # ScheduleRun.status values. A published run's entries can't be edited;
 # only Reset (which wipes every run) removes it.
 DRAFT = "draft"
@@ -2104,12 +2109,16 @@ def get_schedule_config_defaults(user: User = Depends(require_roles(*MANAGERS)))
 
 @app.get("/schedule-runs")
 def list_schedule_runs(user: User = Depends(require_roles(*MANAGERS))):
-    """The school's schedule runs, newest first, with entry counts and open critical flag counts."""
+    """The school's generated schedule runs, newest first, with entry counts
+    and open critical flag counts. Manual compliance checks aren't
+    schedules, so they're left out (their flags still appear in
+    /compliance-flags)."""
     db = SessionLocal()
     try:
         runs = (
             db.query(ScheduleRun)
             .filter(ScheduleRun.school_id == user.school_id)
+            .filter(ScheduleRun.name != COMPLIANCE_CHECK_RUN_NAME)
             .order_by(ScheduleRun.created_at.desc())
             .all()
         )
@@ -2244,6 +2253,8 @@ def publish_schedule_run(run_id: str, request: Request, user: User = Depends(req
         )
         if not run:
             raise HTTPException(status_code=404, detail="Schedule run not found")
+        if run.name == COMPLIANCE_CHECK_RUN_NAME:
+            raise HTTPException(status_code=409, detail="A compliance check isn't a schedule and can't be published.")
         if run.status == PUBLISHED:
             raise HTTPException(status_code=409, detail="This schedule is already published.")
 
@@ -2645,7 +2656,7 @@ def run_compliance_check(user: User = Depends(require_roles(*MANAGERS))):
 
         schedule_run_id = create_schedule_run(
             school_year=school_year,
-            name="Compliance Check",
+            name=COMPLIANCE_CHECK_RUN_NAME,
             school_id=user.school_id,
             summary={
                 "compliance_check_passed": critical_count == 0,
