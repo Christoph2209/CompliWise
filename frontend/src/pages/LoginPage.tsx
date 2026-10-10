@@ -7,7 +7,7 @@ const DEMO_ACCOUNTS = [
   {
     role: "Principal",
     hint: "Build and edit schedules",
-    username: "principal@school.com",
+    username: "principal@school.edu",
     password: "password1234",
   },
   {
