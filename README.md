@@ -14,6 +14,7 @@ It is a FastAPI backend with a PostgreSQL database and a React frontend. It is d
 - [Deploying](DEPLOY.md)
 - [Running the Tests](#running-the-tests)
 - [Roles](#roles)
+- [Logins](#logins)
 - [Accounts and Passwords](#accounts-and-passwords)
 - [Scheduling Workflow](#scheduling-workflow)
 - [Scheduling Algorithm](#scheduling-algorithm)
@@ -187,6 +188,15 @@ python -m pytest tests -q
 | `aide`      | Same as teacher                                                         |
 
 Every request only sees data from the user's own school.
+
+## Logins
+
+There are two logins:
+
+| Role        | Email                  | Password          |
+|-------------|------------------------|-------------------|
+| `principal` | `principal@school.com` | `password1234`    |
+| `teacher`   | `linda@school.com`     | `yellowbanana456` |
 
 ## Accounts and Passwords
 

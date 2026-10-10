@@ -140,6 +140,76 @@
   outline-offset: 2px;
 }
 
+.login-demo {
+  margin-top: 24px;
+  padding: 16px;
+  border: 1px dashed var(--accent-border);
+  border-radius: 12px;
+  background: var(--accent-bg);
+}
+
+.login-demo-title {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.login-demo-text {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.login-demo-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.login-demo-button {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  font: inherit;
+  text-align: left;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color 0.2s ease, transform 0.1s ease;
+}
+
+.login-demo-button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.login-demo-button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.login-demo-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.login-demo-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.login-demo-role {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.login-demo-hint {
+  font-size: 12px;
+  color: var(--text);
+}
+
 .login-forgot {
   display: block;
   margin-top: 16px;
