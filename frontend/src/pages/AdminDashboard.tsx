@@ -84,9 +84,10 @@ export default function Dashboard() {
         {user ? (
           <>
             <span>
-              👤 {user.staff_member
-                ? `${user.full_name}`
-                : user.full_name || user.id}
+              👤 {user.full_name ||
+                (user.staff_member
+                  ? `${user.staff_member.first_name} ${user.staff_member.last_name}`
+                  : user.email)}
                 {"\n\n"}
               <span className="role-badge">{user.role}</span>
             </span>
