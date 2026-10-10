@@ -2365,7 +2365,7 @@ def save_schedule(
 
 
 @app.post("/reset-generated-schedules")
-def reset_generated_schedules(request: Request, user: User = Depends(require_roles(*ADMIN))):
+def reset_generated_schedules(request: Request, user: User = Depends(require_roles(*ADMIN, *PRINCIPAL))):
     """Delete ALL of this school's generated schedule output, published
     runs included, for a clean regenerate. Student and staff records
     remain unchanged. Admin-only and audited: it's destructive."""
