@@ -2365,10 +2365,10 @@ def save_schedule(
 
 
 @app.post("/reset-generated-schedules")
-def reset_generated_schedules(request: Request, user: User = Depends(require_roles(*ADMIN, *PRINCIPAL))):
+def reset_generated_schedules(request: Request, user: User = Depends(require_roles(*MANAGERS))):
     """Delete ALL of this school's generated schedule output, published
     runs included, for a clean regenerate. Student and staff records
-    remain unchanged. Admin-only and audited: it's destructive."""
+    remain unchanged. Managers only and audited: it's destructive."""
     school_id = user.school_id
     try:
         deleted_schedule_entries = delete_entity_many("ScheduleEntry", {}, school_id=school_id)

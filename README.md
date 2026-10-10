@@ -182,8 +182,8 @@ python -m pytest tests -q
 
 | Role        | Can do                                                                  |
 |-------------|-------------------------------------------------------------------------|
-| `admin`     | Everything, plus user accounts, password approvals, CSV import, resets and the audit log |
-| `principal` | Manage students, staff and services; generate and edit schedules        |
+| `admin`     | Everything, plus user accounts, password approvals, CSV import and the audit log |
+| `principal` | Manage students, staff and services; generate, edit and reset schedules |
 | `teacher`   | See their own schedule, their students, and those students' pull-outs   |
 | `aide`      | Same as teacher                                                         |
 

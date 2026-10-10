@@ -413,8 +413,9 @@ def test_published_schedule_is_permanent():
     draft_entry = admin_a.get("/schedule", params={"run_id": draft["id"]}).json()[0]
     assert admin_a.put(f"/schedule/{draft_entry['id']}", json={"room": "Gym"}).status_code == 200
 
-    # Reset wipes everything, published runs included.
-    assert admin_a.post("/reset-generated-schedules").status_code == 200
+    # Reset wipes everything, published runs included. Managers only.
+    assert teacher_a.post("/reset-generated-schedules").status_code == 403
+    assert principal_a.post("/reset-generated-schedules").status_code == 200
     assert admin_a.get("/schedule-runs").json() == []
     assert admin_a.get("/schedule").json() == []
 
